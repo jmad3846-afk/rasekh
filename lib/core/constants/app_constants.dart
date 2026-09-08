@@ -1,6 +1,6 @@
 class AppConstants {
-  static const String appName = 'معمل و تعهدات';
-  static const String appNameEn = 'Factory & Contracting';
+  static const String appName = 'راسخ';
+  static const String appNameEn = 'Rasekh';
   static const String dbName = 'factory_db';
 
   // Hive box names

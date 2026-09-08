@@ -8,7 +8,7 @@
     <!-- For backups on USB/SD via SAF - no permission needed, user grants via picker -->
 
     <application
-        android:label="factory_managment"
+        android:label="راسخ"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">
