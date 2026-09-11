@@ -18,10 +18,23 @@ class _S extends State<BackupScreen> {
     try{
       final path = await BackupService.exportBackup(asZip: true);
       setState(()=> lastPath=path);
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(path==null?'تم الإلغاء':'تم الحفظ: $path', style: GoogleFonts.cairo()), backgroundColor: path==null? Colors.grey: AppColors.success));
+      if (!mounted) return;
+      if (path == null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم الإلغاء', style: GoogleFonts.cairo())));
+        return;
+      }
+      await showDialog(context: context, builder:(_)=> AlertDialog(
+        title: Text('تم إنشاء النسخة بنجاح ✓', style: GoogleFonts.cairo(fontWeight: FontWeight.w800, color: AppColors.success)),
+        content: Text('تم الحفظ في:\n$path\n\nتحقق من وجود data.json + checksum.txt داخل ZIP.', style: GoogleFonts.cairo(fontSize:12)),
+        actions:[ElevatedButton(onPressed: ()=> Navigator.pop(context), child: Text('حسناً', style: GoogleFonts.cairo()))],
+      ));
     }catch(e){
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e', style: GoogleFonts.cairo()), backgroundColor: AppColors.error));
-    } finally { setState(()=> loading=false); }
+      if(mounted) await showDialog(context: context, builder:(_)=> AlertDialog(
+        title: Text('فشل التصدير', style: GoogleFonts.cairo(fontWeight: FontWeight.w800, color: AppColors.error)),
+        content: Text('$e', style: GoogleFonts.cairo(fontSize:13)),
+        actions:[TextButton(onPressed: ()=> Navigator.pop(context), child: Text('إغلاق', style: GoogleFonts.cairo()))],
+      ));
+    } finally { if (mounted) setState(()=> loading=false); }
   }
 
   Future<void> _restore() async {
@@ -37,11 +50,22 @@ class _S extends State<BackupScreen> {
     setState(()=> loading=true);
     try{
       final res = await BackupService.restoreBackup();
-      if(res==RestoreResult.success && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم الاسترجاع بنجاح - أعد تشغيل التطبيق', style: GoogleFonts.cairo()), backgroundColor: AppColors.success));
+      if (!mounted) return;
+      if(res==RestoreResult.success) {
+        await showDialog(context: context, builder:(_)=> AlertDialog(
+          title: Text('تم الاسترجاع بنجاح ✓', style: GoogleFonts.cairo(fontWeight: FontWeight.w800, color: AppColors.success)),
+          content: Text('تم التحقق من data.json والـ checksum والروابط، واستعادة الصور لمجلد التطبيق. أعد تشغيل التطبيق لتحديث كل الشاشات.', style: GoogleFonts.cairo(fontSize:13)),
+          actions:[ElevatedButton(onPressed: ()=> Navigator.pop(context), style: ElevatedButton.styleFrom(backgroundColor: AppColors.success), child: Text('حسناً', style: GoogleFonts.cairo(color: Colors.white)))],
+        ));
+      }
       if(res==RestoreResult.cancelled && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم الإلغاء', style: GoogleFonts.cairo())));
     }catch(e){
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('فشل الاسترجاع: $e', style: GoogleFonts.cairo()), backgroundColor: AppColors.error));
-    } finally { setState(()=> loading=false); }
+      if(mounted) await showDialog(context: context, builder:(_)=> AlertDialog(
+        title: Text('فشل الاسترجاع', style: GoogleFonts.cairo(fontWeight: FontWeight.w800, color: AppColors.error)),
+        content: SingleChildScrollView(child: Text('$e', style: GoogleFonts.cairo(fontSize:13))),
+        actions:[TextButton(onPressed: ()=> Navigator.pop(context), child: Text('إغلاق', style: GoogleFonts.cairo()))],
+      ));
+    } finally { if (mounted) setState(()=> loading=false); }
   }
 
   @override Widget build(BuildContext context){

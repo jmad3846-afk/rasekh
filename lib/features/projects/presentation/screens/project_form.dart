@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/services/image_service.dart';
+import '../../../../core/utils/currency.dart';
 import '../../data/models/project.dart';
 import '../../logic/project_providers.dart';
 
@@ -21,6 +22,7 @@ class _S extends ConsumerState<ProjectFormScreen> {
   late TextEditingController name, phone, location, totalArea, buildingArea, rooms, desc;
   List<String> photos=[];
   bool _picking=false;
+  AppCurrency currency = AppCurrency.syp;
 
   @override void initState(){
     super.initState();
@@ -32,6 +34,7 @@ class _S extends ConsumerState<ProjectFormScreen> {
     rooms=TextEditingController(text: widget.project?.roomCount.toString()??'');
     desc=TextEditingController(text: widget.project?.description??'');
     photos=List.from(widget.project?.photoPaths??[]);
+    currency = widget.project?.currency ?? AppCurrency.syp;
   }
 
   Future<void> pickImage() async {
@@ -166,6 +169,20 @@ class _S extends ConsumerState<ProjectFormScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(isEdit?'تعديل التعهد':'تعهد جديد', style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
       body: Form(key:_form, child: ListView(padding: const EdgeInsets.all(16), children:[
+        Text('عملة المشروع * (تُورَّث لكل الإجرائيات والمالية)', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
+        const SizedBox(height:8),
+        Row(children:[
+          Expanded(child: _currencyOption(AppCurrency.syp)),
+          const SizedBox(width:12),
+          Expanded(child: _currencyOption(AppCurrency.usd)),
+        ]),
+        if (isEdit)
+          Padding(
+            padding: const EdgeInsets.only(top:6),
+            child: Text('لا يمكن تغيير العملة بعد الإنشاء لضمان سلامة المالية.',
+              style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary)),
+          ),
+        const SizedBox(height:16),
         Text('بيانات العميل والموقع *', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
         const SizedBox(height:8),
         TextFormField(controller:name, decoration: const InputDecoration(labelText:'اسم العميل *', prefixIcon: Icon(Icons.person)), validator:(v)=> v!.isEmpty?'مطلوب':null),
@@ -206,14 +223,40 @@ class _S extends ConsumerState<ProjectFormScreen> {
             p.clientName=name.text; p.clientPhone=phone.text; p.location=location.text;
             p.totalArea=double.parse(totalArea.text); p.buildingArea=double.parse(buildingArea.text);
             p.roomCount=int.parse(rooms.text); p.description=desc.text; p.photoPaths=photos;
+            // Currency locked after creation — keep original.
             await ref.read(projectServiceProvider).update(p);
           } else {
-            final p=Project(clientName:name.text, clientPhone:phone.text, location:location.text, totalArea: double.parse(totalArea.text), buildingArea: double.parse(buildingArea.text), roomCount: int.parse(rooms.text), description: desc.text, photoPaths: photos);
+            final p=Project(clientName:name.text, clientPhone:phone.text, location:location.text, totalArea: double.parse(totalArea.text), buildingArea: double.parse(buildingArea.text), roomCount: int.parse(rooms.text), description: desc.text, photoPaths: photos, currency: currency);
             await ref.read(projectServiceProvider).add(p);
           }
           if(mounted) Navigator.pop(context);
         }, child: Text(isEdit?'حفظ التعديل':'إنشاء المشروع'))),
       ])),
+    );
+  }
+
+  Widget _currencyOption(AppCurrency c) {
+    final isEdit = widget.project != null;
+    final selected = currency == c;
+    final isUsd = c == AppCurrency.usd;
+    return InkWell(
+      onTap: isEdit ? null : () => setState(()=> currency = c),
+      borderRadius: BorderRadius.circular(12),
+      child: Opacity(
+        opacity: isEdit && !selected ? 0.5 : 1.0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical:12),
+          decoration: BoxDecoration(
+            color: selected ? (isUsd ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7)) : Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: selected ? (isUsd ? AppColors.success : AppColors.goldDark) : AppColors.border, width: selected ? 2 : 1),
+          ),
+          child: Column(children:[
+            Text(isUsd ? '\$' : 'ل.س', style: GoogleFonts.cairo(fontSize:20, fontWeight: FontWeight.w900, color: isUsd ? AppColors.success : AppColors.goldDark)),
+            Text(isUsd ? 'دولار USD' : 'ليرة SYP', style: GoogleFonts.cairo(fontSize:12, fontWeight: FontWeight.w700)),
+          ]),
+        ),
+      ),
     );
   }
 }

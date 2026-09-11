@@ -1,4 +1,5 @@
 import 'package:hive_flutter/hive_flutter.dart';
+import '../../core/utils/currency.dart';
 import '../../features/factory/data/models/product.dart';
 import '../../features/factory/data/models/customer.dart';
 import '../../features/factory/data/models/invoice.dart';
@@ -21,6 +22,7 @@ class HiveInit {
     Hive.registerAdapter(ProcedureStatusAdapter());
     Hive.registerAdapter(TransactionTypeAdapter());
     Hive.registerAdapter(TransactionPartyAdapter());
+    Hive.registerAdapter(AppCurrencyAdapter());
 
     await Future.wait([
       Hive.openBox<Product>('products'),

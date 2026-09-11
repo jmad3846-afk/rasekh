@@ -1,9 +1,9 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/widgets.dart';
+import '../../../../core/utils/currency.dart';
 import '../../../../core/utils/money.dart';
 import '../../../../core/services/image_service.dart';
 import '../../data/models/project.dart';
@@ -25,7 +25,10 @@ class ProjectDetailScreen extends ConsumerWidget {
     );
 
     return Scaffold(
-      appBar: AppBar(title: Text(liveProject.location, style: GoogleFonts.cairo(fontWeight: FontWeight.w800)), flexibleSpace: Container(decoration: const BoxDecoration(gradient: AppColors.navyGradient))),
+      appBar: AppBar(title: Text(liveProject.location, style: GoogleFonts.cairo(fontWeight: FontWeight.w800)), flexibleSpace: Container(decoration: const BoxDecoration(gradient: AppColors.navyGradient)), actions: [
+        Padding(padding: const EdgeInsets.symmetric(vertical:12, horizontal:4), child: _currencyBadge(liveProject.currency)),
+        const SizedBox(width:8),
+      ]),
       body: ListView(padding: const EdgeInsets.all(16), children:[
         GlassCard(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
           Row(children:[Expanded(child: Text(liveProject.clientName, style: GoogleFonts.cairo(fontWeight: FontWeight.w800))), Text(liveProject.clientPhone, style: GoogleFonts.cairo(color: AppColors.textSecondary))]),
@@ -64,9 +67,9 @@ class ProjectDetailScreen extends ConsumerWidget {
             ),
           const Divider(height:24),
           Row(children:[
-            _stat('الإجمالي', Money.format(liveProject.totalCost), AppColors.deepNavy),
-            _stat('مكتمل', Money.format(liveProject.completedCost), AppColors.success),
-            _stat('معلق', Money.format(liveProject.totalCost-liveProject.completedCost), AppColors.warning),
+            _stat('الإجمالي', Money.withCurrency(liveProject.totalCost, liveProject.currency), AppColors.deepNavy),
+            _stat('مكتمل', Money.withCurrency(liveProject.completedCost, liveProject.currency), AppColors.success),
+            _stat('معلق', Money.withCurrency(liveProject.totalCost-liveProject.completedCost, liveProject.currency), AppColors.warning),
           ])
         ])),
         const SizedBox(height:16),
@@ -93,25 +96,44 @@ class ProjectDetailScreen extends ConsumerWidget {
       Text(value, style: GoogleFonts.cairo(fontSize:13,fontWeight: FontWeight.w800, color: color)),
     ]));
   }
+  Widget _currencyBadge(AppCurrency c) {
+    final isUsd = c == AppCurrency.usd;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal:10, vertical:4),
+      decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+      child: Text(isUsd ? '\$ USD' : 'ل.س SYP', style: GoogleFonts.cairo(fontSize:12, fontWeight: FontWeight.w800, color: Colors.white)),
+    );
+  }
   Widget _procedureCard(BuildContext context, WidgetRef ref, Procedure pr){
+    final cur = pr.currency;
     return Padding(padding: const EdgeInsets.only(bottom:12), child: GlassCard(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
       Row(children:[
         Expanded(child: Text(pr.title, style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
+        _currencyBadge(cur),
+        const SizedBox(width:6),
         StatusBadge(label: pr.status==ProcedureStatus.completed?'مكتملة':'قيد الانتظار', isCompleted: pr.status==ProcedureStatus.completed),
       ]),
       Text(pr.description, style: GoogleFonts.cairo(fontSize:12,color: AppColors.textSecondary)),
       const Divider(height:16),
-      Text('المعلم: ${pr.masterName} • ${Money.format(pr.masterWage)}', style: GoogleFonts.cairo(fontSize:12, fontWeight: FontWeight.w600)),
-      Text('العمال: ${pr.workers.map((w)=> '${w.name} (${Money.format(w.cost)})').join('، ')}', style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary)),
-      Text('المورد: ${pr.supplier.name} • ${pr.supplier.materials} • ${Money.format(pr.supplier.totalCost)}', style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary)),
+      Text('المعلم: ${pr.masterName} • ${Money.withCurrency(pr.masterWage, cur)}', style: GoogleFonts.cairo(fontSize:12, fontWeight: FontWeight.w600)),
+      Text('العمال: ${pr.workers.map((w)=> '${w.name} (${Money.withCurrency(w.cost, cur)})').join('، ')}', style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary)),
+      Text('المورد: ${pr.supplier.name} • ${pr.supplier.materials} • ${Money.withCurrency(pr.supplier.totalCost, cur)}', style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary)),
       const SizedBox(height:8),
       Row(children:[
-        Text('الإجمالي ${Money.format(pr.totalCost)}', style: GoogleFonts.cairo(fontSize:12,fontWeight: FontWeight.w800, color: AppColors.deepNavy)),
+        Flexible(child: Text('الإجمالي ${Money.withCurrency(pr.totalCost, cur)}', style: GoogleFonts.cairo(fontSize:12,fontWeight: FontWeight.w800, color: AppColors.deepNavy))),
         const Spacer(),
         Switch(value: pr.status==ProcedureStatus.completed, activeThumbColor: AppColors.success, onChanged: (v) async {
           await ref.read(projectServiceProvider).updateProcedureStatus(pr, v?ProcedureStatus.completed:ProcedureStatus.pending);
         }),
         Text(pr.status==ProcedureStatus.completed?'مكتمل':'معلق', style: GoogleFonts.cairo(fontSize:11)),
+        IconButton(tooltip: 'تعديل', onPressed: () {
+          final liveList = ref.read(proceduresProvider(project.id)).value ?? [];
+          final live = liveList.firstWhere((e) => e.id == pr.id, orElse: () => pr);
+          // Need project for currency inheritance.
+          final projects = ref.read(projectsProvider).value ?? [];
+          final liveProj = projects.firstWhere((e) => e.id == pr.projectId, orElse: () => project);
+          Navigator.push(context, MaterialPageRoute(builder:(_)=> ProcedureFormScreen(project: liveProj, procedure: live)));
+        }, icon: const Icon(Icons.edit_outlined, color: AppColors.deepNavy, size:20)),
         IconButton(onPressed: () async {
           final ok = await showDialog<bool>(context:context, builder:(_)=> AlertDialog(title: Text('حذف الاجرائية؟', style: GoogleFonts.cairo()), content: Text('سيتم تعديل الإجماليات والمالية', style: GoogleFonts.cairo()), actions:[TextButton(onPressed: ()=> Navigator.pop(context,false), child: Text('إلغاء', style: GoogleFonts.cairo())), TextButton(onPressed: ()=> Navigator.pop(context,true), child: Text('حذف', style: GoogleFonts.cairo(color: AppColors.error)))]));
           if(ok==true) await ref.read(projectServiceProvider).deleteProcedure(pr);
