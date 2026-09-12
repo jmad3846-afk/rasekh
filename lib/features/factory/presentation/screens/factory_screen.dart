@@ -5,6 +5,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/widgets.dart';
 import '../../../../core/utils/currency.dart';
 import '../../../../core/utils/money.dart';
+import '../../../../core/theme/finance_widgets.dart';
 import '../../logic/factory_providers.dart';
 import '../../data/models/product.dart';
 import '../../data/models/invoice.dart';
@@ -105,13 +106,17 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
       separatorBuilder: (_,__)=> const SizedBox(height:12),
       itemBuilder: (_,i){
         final p=products[i];
-        final low = p.stockQuantity < 50;
+        final low = p.isLowStock;
         return GlassCard(child: Row(children:[
           Container(width:56,height:56,decoration:BoxDecoration(color: low?AppColors.errorBg:AppColors.goldLight, borderRadius: BorderRadius.circular(12)), child: Icon(Icons.category, color: low?AppColors.error:AppColors.goldDark)),
           const SizedBox(width:12),
           Expanded(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
-            Text(p.name, style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
-            Text('${p.category} • ${Money.format(p.unitPrice)}/${p.unit}', style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary)),
+            Row(children:[
+              Flexible(child: Text(p.name, style: GoogleFonts.cairo(fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis)),
+              const SizedBox(width:6),
+              CurrencyBadge(p.currency),
+            ]),
+            Text('${p.category} • ${Money.withCurrency(p.unitPrice, p.currency)}/${p.unit}', style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary)),
             const SizedBox(height:4),
             Row(children:[
               Container(padding: const EdgeInsets.symmetric(horizontal:8,vertical:2), decoration: BoxDecoration(color: low?AppColors.errorBg:AppColors.successBg, borderRadius: BorderRadius.circular(20)), child: Text('${p.stockQuantity.toStringAsFixed(0)} متوفر', style: GoogleFonts.cairo(fontSize:11,color: low?AppColors.error:AppColors.success, fontWeight: FontWeight.w700))),
@@ -119,7 +124,15 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
           ])),
           PopupMenuButton(onSelected: (v) async {
             if(v=='edit') showModalBottomSheet(context:context, isScrollControlled:true, builder:(_)=> ProductFormSheet(product:p));
-            if(v=='delete'){ await ref.read(productServiceProvider).delete(p); if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم حذف ${p.name}', style: GoogleFonts.cairo()))); }
+            if(v=='delete'){
+              final ok = await confirmDelete(context,
+                  title: 'حذف المنتج؟',
+                  message: 'هل أنت متأكد من حذف "${p.name}" نهائياً؟ لا يمكن التراجع.');
+              if(ok){
+                await ref.read(productServiceProvider).delete(p);
+                if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم حذف ${p.name}', style: GoogleFonts.cairo())));
+              }
+            }
           }, itemBuilder: (_)=> [
             PopupMenuItem(value:'edit', child: Text('تعديل', style: GoogleFonts.cairo())),
             PopupMenuItem(value:'delete', child: Text('حذف', style: GoogleFonts.cairo(color: AppColors.error))),
@@ -140,6 +153,13 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
           Row(children:[
             Flexible(child: Text(inv.invoiceNumber, style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize:13))),
             _currencyBadge(inv.currency),
+            if (inv.isPaymentOnly)
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(color: AppColors.deepNavy, borderRadius: BorderRadius.circular(20)),
+                child: Text('دفعة', style: GoogleFonts.cairo(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.white)),
+              ),
             const Spacer(),
             Text(inv.createdAt.toString().substring(0,10), style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary)),
             PopupMenuButton(onSelected: (v) async {
@@ -170,6 +190,19 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
             ]),
           ]),
           const Divider(),
+          if (inv.isPaymentOnly)
+            Row(children:[
+              Expanded(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
+                Text(inv.customerName, style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
+                Text(inv.customerPhone, style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary)),
+                if (inv.notes.isNotEmpty) Text(inv.notes, style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary)),
+              ])),
+              Column(crossAxisAlignment:CrossAxisAlignment.end, children:[
+                Text(Money.withCurrency(inv.totalPrice, inv.currency), style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
+                Text('تسوية مباشرة', style: GoogleFonts.cairo(fontSize:11,color: AppColors.success)),
+              ])
+            ])
+          else
           Row(children:[
             Expanded(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
               Text(inv.customerName, style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
@@ -188,13 +221,5 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
     );
   }
 
-  Widget _currencyBadge(AppCurrency c) {
-    final isUsd = c == AppCurrency.usd;
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal:6),
-      padding: const EdgeInsets.symmetric(horizontal:8, vertical:2),
-      decoration: BoxDecoration(color: isUsd ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(20)),
-      child: Text(isUsd ? '\$' : 'ل.س', style: GoogleFonts.cairo(fontSize:11, fontWeight: FontWeight.w800, color: isUsd ? AppColors.success : AppColors.goldDark)),
-    );
-  }
+  Widget _currencyBadge(AppCurrency c) => CurrencyBadge(c);
 }

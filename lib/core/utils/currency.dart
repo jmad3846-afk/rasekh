@@ -34,3 +34,31 @@ class AppCurrencyAdapter extends TypeAdapter<AppCurrency> {
     writer.writeInt(obj.index);
   }
 }
+
+/// Live dynamic currency conversion engine.
+///
+/// Convention: [dollarRate] = SYP per 1 USD (e.g. 12000).
+/// - USD -> SYP: `amount * rate`
+/// - SYP -> USD: `amount / rate`
+class CurrencyConverter {
+  /// Equivalent value in the *other* currency.
+  static double convert({
+    required double amount,
+    required AppCurrency from,
+    required double dollarRate,
+  }) {
+    if (dollarRate <= 0) return 0;
+    if (from == AppCurrency.usd) return amount * dollarRate;
+    return amount / dollarRate;
+  }
+
+  static AppCurrency other(AppCurrency c) =>
+      c == AppCurrency.usd ? AppCurrency.syp : AppCurrency.usd;
+
+  static double? tryParseRate(String? v) {
+    if (v == null) return null;
+    final r = double.tryParse(v.trim());
+    if (r == null || r <= 0) return null;
+    return r;
+  }
+}

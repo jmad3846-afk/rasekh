@@ -3,30 +3,41 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/widgets.dart';
-import '../../../../core/utils/currency.dart';
+import '../../../../core/theme/finance_widgets.dart';
 import '../../../../core/utils/money.dart';
 import '../../../../core/services/image_service.dart';
+import '../../../../core/database/hive_init.dart';
 import '../../data/models/project.dart';
 import '../../data/models/procedure.dart';
 import '../../logic/project_providers.dart';
-import 'procedure_form.dart';
+import '../../logic/site_providers.dart';
+import 'required_materials_screen.dart';
+import 'daily_logs_screen.dart';
 
 class ProjectDetailScreen extends ConsumerWidget {
   final Project project;
-  const ProjectDetailScreen({super.key, required this.project});
+  /// 0 = scroll to materials shortcut, 1 = daily logs (used by dashboard quick nav).
+  final int initialTab;
+  const ProjectDetailScreen({super.key, required this.project, this.initialTab = 1});
 
   @override Widget build(BuildContext context, WidgetRef ref){
     final procsAsync = ref.watch(proceduresProvider(project.id));
-    // Watch live project so photoPaths update reactively after edit
     final projectsAsync = ref.watch(projectsProvider);
     final liveProject = projectsAsync.maybeWhen(
       data: (list) => list.firstWhere((p)=> p.id==project.id, orElse: ()=> project),
       orElse: ()=> project,
     );
+    ref.watch(dailyLogsProvider(project.id));
+    ref.watch(requiredMaterialsProvider(project.id));
+    final dailyCount = HiveInit.dailyLogs.values.where((d)=> d.projectId == project.id).length;
+    final matCount = HiveInit.requiredMaterials.values.where((m)=> m.projectId == project.id).length;
+    final siteTotal = HiveInit.siteProcedures.values
+        .where((p)=> p.projectId == project.id)
+        .fold(0.0, (s, e)=> s + e.totalCost);
 
     return Scaffold(
       appBar: AppBar(title: Text(liveProject.location, style: GoogleFonts.cairo(fontWeight: FontWeight.w800)), flexibleSpace: Container(decoration: const BoxDecoration(gradient: AppColors.navyGradient)), actions: [
-        Padding(padding: const EdgeInsets.symmetric(vertical:12, horizontal:4), child: _currencyBadge(liveProject.currency)),
+        Padding(padding: const EdgeInsets.symmetric(vertical:12, horizontal:4), child: CurrencyBadge(liveProject.currency, dark: true)),
         const SizedBox(width:8),
       ]),
       body: ListView(padding: const EdgeInsets.all(16), children:[
@@ -36,7 +47,6 @@ class ProjectDetailScreen extends ConsumerWidget {
           const SizedBox(height:8),
           Text(liveProject.description, style: GoogleFonts.cairo(fontSize:13)),
           const SizedBox(height:12),
-          // Always show image area — with proper placeholder if empty
           Text('صور العقد (${liveProject.photoPaths.length})', style: GoogleFonts.cairo(fontSize:12, fontWeight: FontWeight.w700, color: AppColors.textSecondary)),
           const SizedBox(height:8),
           if(liveProject.photoPaths.isEmpty)
@@ -70,18 +80,48 @@ class ProjectDetailScreen extends ConsumerWidget {
             _stat('الإجمالي', Money.withCurrency(liveProject.totalCost, liveProject.currency), AppColors.deepNavy),
             _stat('مكتمل', Money.withCurrency(liveProject.completedCost, liveProject.currency), AppColors.success),
             _stat('معلق', Money.withCurrency(liveProject.totalCost-liveProject.completedCost, liveProject.currency), AppColors.warning),
-          ])
+          ]),
+          if (siteTotal > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('إجمالي اليوميات: ${Money.withCurrency(siteTotal, liveProject.currency)}',
+                  style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.goldDark)),
+            ),
         ])),
-        const SizedBox(height:16),
+        const SizedBox(height: 16),
+        // ── Req #11: entry points ──
         Row(children:[
-          Text('الإجرائيات', style: GoogleFonts.cairo(fontSize:16,fontWeight: FontWeight.w800)),
-          const Spacer(),
-          ElevatedButton.icon(onPressed: ()=> Navigator.push(context, MaterialPageRoute(builder:(_)=> ProcedureFormScreen(project:liveProject))), icon: const Icon(Icons.add, size:18), label: Text('إضافة اجرائية', style: GoogleFonts.cairo(fontSize:12)), style: ElevatedButton.styleFrom(backgroundColor: AppColors.gold, foregroundColor: Colors.white)),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: ()=> Navigator.push(context, MaterialPageRoute(builder:(_)=> RequiredMaterialsScreen(project: liveProject))),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.gold, foregroundColor: Colors.white),
+              icon: const Icon(Icons.inventory_2_outlined, size: 18),
+              label: Text('المواد اللازمة ($matCount)', style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: ()=> Navigator.push(context, MaterialPageRoute(builder:(_)=> DailyLogsScreen(project: liveProject))),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.deepNavy, foregroundColor: Colors.white),
+              icon: const Icon(Icons.calendar_month_outlined, size: 18),
+              label: Text('يوميات تعهد ($dailyCount)', style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+          ),
         ]),
-        const SizedBox(height:12),
+        const SizedBox(height: 8),
+        Container(padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: AppColors.goldLight, borderRadius: BorderRadius.circular(10)),
+          child: Text('الإجرائيات الجديدة تضاف حصراً داخل يومية محددة (زر يوميات تعهد).',
+              style: GoogleFonts.cairo(fontSize: 11, color: AppColors.goldDark))),
+        const SizedBox(height: 16),
+        Row(children:[
+          Text('الإجرائيات القديمة (للأرشيف)', style: GoogleFonts.cairo(fontSize: 14,fontWeight: FontWeight.w800)),
+        ]),
+        const SizedBox(height: 8),
         procsAsync.when(
           data:(procs){
-            if(procs.isEmpty) return GlassCard(child: Center(child: Padding(padding: const EdgeInsets.all(16), child: Text('لا توجد اجرائيات بعد - أضف أول اجرائية (أساس، لبخ، كهرباء...)', style: GoogleFonts.cairo(color: AppColors.textSecondary), textAlign: TextAlign.center))));
+            if(procs.isEmpty) return GlassCard(child: Center(child: Padding(padding: const EdgeInsets.all(16), child: Text('لا توجد اجرائيات قديمة', style: GoogleFonts.cairo(color: AppColors.textSecondary), textAlign: TextAlign.center))));
             return Column(children: procs.map((pr)=> _procedureCard(context, ref, pr)).toList());
           },
           loading: ()=> const Center(child: CircularProgressIndicator()),
@@ -96,20 +136,12 @@ class ProjectDetailScreen extends ConsumerWidget {
       Text(value, style: GoogleFonts.cairo(fontSize:13,fontWeight: FontWeight.w800, color: color)),
     ]));
   }
-  Widget _currencyBadge(AppCurrency c) {
-    final isUsd = c == AppCurrency.usd;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal:10, vertical:4),
-      decoration: BoxDecoration(color: Colors.white.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
-      child: Text(isUsd ? '\$ USD' : 'ل.س SYP', style: GoogleFonts.cairo(fontSize:12, fontWeight: FontWeight.w800, color: Colors.white)),
-    );
-  }
   Widget _procedureCard(BuildContext context, WidgetRef ref, Procedure pr){
     final cur = pr.currency;
     return Padding(padding: const EdgeInsets.only(bottom:12), child: GlassCard(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
       Row(children:[
         Expanded(child: Text(pr.title, style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
-        _currencyBadge(cur),
+        CurrencyBadge(cur),
         const SizedBox(width:6),
         StatusBadge(label: pr.status==ProcedureStatus.completed?'مكتملة':'قيد الانتظار', isCompleted: pr.status==ProcedureStatus.completed),
       ]),
@@ -122,20 +154,9 @@ class ProjectDetailScreen extends ConsumerWidget {
       Row(children:[
         Flexible(child: Text('الإجمالي ${Money.withCurrency(pr.totalCost, cur)}', style: GoogleFonts.cairo(fontSize:12,fontWeight: FontWeight.w800, color: AppColors.deepNavy))),
         const Spacer(),
-        Switch(value: pr.status==ProcedureStatus.completed, activeThumbColor: AppColors.success, onChanged: (v) async {
-          await ref.read(projectServiceProvider).updateProcedureStatus(pr, v?ProcedureStatus.completed:ProcedureStatus.pending);
-        }),
-        Text(pr.status==ProcedureStatus.completed?'مكتمل':'معلق', style: GoogleFonts.cairo(fontSize:11)),
-        IconButton(tooltip: 'تعديل', onPressed: () {
-          final liveList = ref.read(proceduresProvider(project.id)).value ?? [];
-          final live = liveList.firstWhere((e) => e.id == pr.id, orElse: () => pr);
-          // Need project for currency inheritance.
-          final projects = ref.read(projectsProvider).value ?? [];
-          final liveProj = projects.firstWhere((e) => e.id == pr.projectId, orElse: () => project);
-          Navigator.push(context, MaterialPageRoute(builder:(_)=> ProcedureFormScreen(project: liveProj, procedure: live)));
-        }, icon: const Icon(Icons.edit_outlined, color: AppColors.deepNavy, size:20)),
         IconButton(onPressed: () async {
-          final ok = await showDialog<bool>(context:context, builder:(_)=> AlertDialog(title: Text('حذف الاجرائية؟', style: GoogleFonts.cairo()), content: Text('سيتم تعديل الإجماليات والمالية', style: GoogleFonts.cairo()), actions:[TextButton(onPressed: ()=> Navigator.pop(context,false), child: Text('إلغاء', style: GoogleFonts.cairo())), TextButton(onPressed: ()=> Navigator.pop(context,true), child: Text('حذف', style: GoogleFonts.cairo(color: AppColors.error)))]));
+          final ok = await confirmDelete(context, title: 'حذف الاجرائية؟',
+              message: 'هل أنت متأكد من حذف هذه الإجرائية؟ سيتم تعديل الإجماليات والمالية.');
           if(ok==true) await ref.read(projectServiceProvider).deleteProcedure(pr);
         }, icon: const Icon(Icons.delete_outline, color: AppColors.error, size:20)),
       ])

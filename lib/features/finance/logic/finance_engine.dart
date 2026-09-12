@@ -6,6 +6,7 @@ import '../data/models/transaction.dart';
 import '../../factory/data/models/invoice.dart';
 import '../../projects/data/models/procedure.dart';
 import '../../projects/data/models/project.dart';
+import '../../projects/data/models/site_procedure.dart';
 
 /// Idempotent financial ledger engine with multi-currency support.
 ///
@@ -220,7 +221,15 @@ class FinanceEngine {
     String? projectId,
     String? relatedId,
     AppCurrency currency = AppCurrency.syp,
+    double? dollarRate,
+    String reason = 'دفعة مسددة',
+    DateTime? date,
   }) async {
+    double? converted;
+    if (dollarRate != null && dollarRate > 0) {
+      converted = CurrencyConverter.convert(
+          amount: amount, from: currency, dollarRate: dollarRate);
+    }
     await _add(TransactionEntry(
       partyId: partyId,
       partyName: partyName,
@@ -229,15 +238,101 @@ class FinanceEngine {
       type: TransactionType.payment,
       amount: amount,
       source: source,
-      reason: 'دفعة مسددة',
+      reason: reason,
       relatedId: relatedId,
       projectId: projectId,
       currency: currency,
+      dollarRate: dollarRate,
+      convertedAmount: converted,
+      createdAt: date,
     ));
+  }
+
+  /// Req #5: full payment editing — adjusts amount, notes, date, rate.
+  /// Net remaining balances are derived live from the ledger, so no
+  /// orphaned records are created; we simply update the row in place.
+  static Future<void> updatePayment({
+    required TransactionEntry payment,
+    required double amount,
+    required AppCurrency currency,
+    String? reason,
+    String? source,
+    DateTime? date,
+    double? dollarRate,
+  }) async {
+    assert(payment.type == TransactionType.payment);
+    payment.amount = amount;
+    payment.currency = currency;
+    if (reason != null) payment.reason = reason;
+    if (source != null) payment.source = source;
+    if (date != null) payment.createdAt = date;
+    payment.dollarRate = dollarRate;
+    payment.recalcConversion();
+    await payment.save();
+  }
+
+  static Future<void> deletePayment(TransactionEntry payment) async {
+    await payment.delete();
   }
 
   static Future<void> _add(TransactionEntry t) async =>
       await _box.put(t.id, t);
+
+  // ── Site procedures (Req #11) ───────────────────────────────
+  /// Posts a site procedure: client debit + worker/master credit + driver credit.
+  /// Idempotent via [clearRelatedTransactions].
+  static Future<void> onSiteProcedureAdded(SiteProcedure p, Project project) async {
+    p.currency = project.currency;
+    p.recalc();
+    await clearRelatedTransactions(p.id);
+    project.totalCost += p.totalCost;
+    project.completedCost += p.totalCost;
+    await project.save();
+    final base = 'يومية ${p.description.isEmpty ? p.personName : p.description} - ${project.location}';
+    final cur = p.currency;
+    await _add(TransactionEntry(
+      partyId: project.clientId, partyName: project.clientName,
+      partyPhone: project.clientPhone, party: TransactionParty.client,
+      type: TransactionType.debit, amount: p.totalCost,
+      source: base, reason: 'تكلفة إجرائية موقع',
+      relatedId: p.id, projectId: project.id, currency: cur,
+    ));
+    if (p.kind == SiteProcedureKind.worker) {
+      await _add(TransactionEntry(
+        partyId: p.workerId.isEmpty ? 'worker-${p.id}' : p.workerId,
+        partyName: p.workerName, party: TransactionParty.worker,
+        type: TransactionType.credit, amount: p.workerWage,
+        source: base, reason: 'أجرة عامل ${p.workerName}',
+        relatedId: p.id, projectId: project.id, currency: cur,
+      ));
+    } else {
+      await _add(TransactionEntry(
+        partyId: p.masterId.isEmpty ? 'master-${p.id}' : p.masterId,
+        partyName: p.masterName, party: TransactionParty.master,
+        type: TransactionType.credit, amount: p.baseWage,
+        source: base, reason: p.contractType == MasterContractType.daily
+            ? 'يومية معلم ${p.masterName}' : 'مقطوع معلم ${p.masterName}: ${p.description}',
+        relatedId: p.id, projectId: project.id, currency: cur,
+      ));
+    }
+    if (p.needVehicle && p.driverWage > 0) {
+      await _add(TransactionEntry(
+        partyId: p.driverId.isEmpty ? 'driver-${p.id}' : p.driverId,
+        partyName: p.driverName.isEmpty ? 'سائق' : p.driverName,
+        party: TransactionParty.driver,
+        type: TransactionType.credit, amount: p.driverWage,
+        source: base, reason: 'أجرة نقل${p.transportNotes.isEmpty ? '' : ': ${p.transportNotes}'}',
+        relatedId: p.id, projectId: project.id, currency: cur,
+      ));
+    }
+  }
+
+  static Future<void> onSiteProcedureDeleted(SiteProcedure p, Project project) async {
+    project.totalCost -= p.totalCost;
+    project.completedCost -= p.totalCost;
+    await project.save();
+    await clearRelatedTransactions(p.id);
+  }
 
   // ── Balances (currency-aware) ─────────────────────────────
   static double balanceFor(String partyId, TransactionParty party,
@@ -296,6 +391,85 @@ class FinanceEngine {
           t.type == TransactionType.payment) sum -= t.amount;
     }
     return sum;
+  }
+
+  /// Req #3A: payable debts — what WE owe suppliers/masters/workers/drivers.
+  static double totalPayableDebt({AppCurrency? currency}) {
+    double sum = 0;
+    for (final t in _box.values.where((e) =>
+        (e.party == TransactionParty.supplier ||
+            e.party == TransactionParty.master ||
+            e.party == TransactionParty.worker ||
+            e.party == TransactionParty.driver) &&
+        (currency == null || e.currency == currency))) {
+      if (t.type == TransactionType.credit) sum += t.amount;
+      if (t.type == TransactionType.payment) sum -= t.amount;
+    }
+    return sum;
+  }
+
+  /// Per-person net remaining + total paid (Req #6 top summary cards).
+  /// [isClient]: clients owe us (debit - payment); personnel we owe them
+  /// (credit - payment). Returns (remaining, paid).
+  static ({double remaining, double paid}) personSummary(
+      List<TransactionEntry> timeline) {
+    double debt = 0, paid = 0;
+    for (final t in timeline) {
+      if (t.type == TransactionType.payment) {
+        paid += t.amount;
+      } else if (t.type == TransactionType.debit ||
+          (t.party != TransactionParty.client &&
+              t.type == TransactionType.credit)) {
+        debt += t.amount;
+      }
+    }
+    return (remaining: (debt - paid), paid: paid);
+  }
+
+  /// Req #3B: projects containing personnel with pending (credit > payment) balances.
+  static List<String> projectsWithUnpaidPersonnel() {
+    final Map<String, double> netByProjectPerson = {};
+    for (final t in _box.values) {
+      if (t.party == TransactionParty.client) continue;
+      if (t.projectId == null || t.projectId!.isEmpty) continue;
+      final key = '${t.projectId}|${t.party}|${t.partyId}';
+      final cur = netByProjectPerson[key] ?? 0;
+      if (t.type == TransactionType.credit) {
+        netByProjectPerson[key] = cur + t.amount;
+      } else if (t.type == TransactionType.payment) {
+        netByProjectPerson[key] = cur - t.amount;
+      }
+    }
+    final projects = <String>{};
+    netByProjectPerson.forEach((k, v) {
+      if (v > 0.005) projects.add(k.split('|').first);
+    });
+    return projects.toList();
+  }
+
+  /// Personnel balances inside one project: key = party|partyId.
+  static Map<String, ({String name, String phone, TransactionParty party, double remaining, double paid})>
+      personnelBalancesForProject(String projectId) {
+    final Map<String, List<TransactionEntry>> grouped = {};
+    for (final t in _box.values) {
+      if (t.party == TransactionParty.client) continue;
+      if (t.projectId != projectId) continue;
+      final key = '${t.party.index}|${t.partyId}';
+      grouped.putIfAbsent(key, () => []).add(t);
+    }
+    final out = <String, ({String name, String phone, TransactionParty party, double remaining, double paid})>{};
+    grouped.forEach((key, list) {
+      final first = list.first;
+      final s = personSummary(list);
+      out[key] = (
+        name: first.partyName,
+        phone: first.partyPhone ?? first.partyId,
+        party: first.party,
+        remaining: s.remaining,
+        paid: s.paid,
+      );
+    });
+    return out;
   }
 
   static double totalSales({AppCurrency? currency}) {

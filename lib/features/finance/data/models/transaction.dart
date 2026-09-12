@@ -9,9 +9,14 @@ class TransactionTypeAdapter extends TypeAdapter<TransactionType> {
   @override void write(BinaryWriter w, TransactionType o)=> w.writeInt(o.index);
 }
 @HiveType(typeId: 10)
-enum TransactionParty { @HiveField(0) client, @HiveField(1) master, @HiveField(2) worker, @HiveField(3) supplier }
+enum TransactionParty { @HiveField(0) client, @HiveField(1) master, @HiveField(2) worker, @HiveField(3) supplier, @HiveField(4) driver }
 class TransactionPartyAdapter extends TypeAdapter<TransactionParty> {
-  @override final typeId=10; @override TransactionParty read(BinaryReader r)=> TransactionParty.values[r.readInt()];
+  @override final typeId=10;
+  @override TransactionParty read(BinaryReader r) {
+    final i = r.readInt();
+    if (i < 0 || i >= TransactionParty.values.length) return TransactionParty.client;
+    return TransactionParty.values[i];
+  }
   @override void write(BinaryWriter w, TransactionParty o)=> w.writeInt(o.index);
 }
 
@@ -30,24 +35,48 @@ class TransactionEntry extends HiveObject {
   @HiveField(10) String? projectId;
   @HiveField(11) AppCurrency currency;
   @HiveField(12) String? partyPhone;
+  /// Req #2: live FX audit trail — rate used at payment time (SYP per 1 USD).
+  @HiveField(13) double? dollarRate;
+  /// Req #2: calculated secondary-currency equivalent (auditing).
+  @HiveField(14) double? convertedAmount;
 
   TransactionEntry({
     String? id, required this.partyId, required this.partyName, required this.party,
     required this.type, required this.amount, required this.source, required this.reason,
     this.relatedId, DateTime? createdAt, this.projectId,
     this.currency = AppCurrency.syp, this.partyPhone,
+    this.dollarRate, this.convertedAmount,
   }) : id=id??const Uuid().v4(), createdAt=createdAt??DateTime.now();
+
+  /// The currency of [convertedAmount] (always the opposite of [currency]).
+  AppCurrency get secondaryCurrency =>
+      currency == AppCurrency.usd ? AppCurrency.syp : AppCurrency.usd;
+
+  /// Recompute [convertedAmount] from [amount]+[currency]+[dollarRate].
+  void recalcConversion() {
+    if (dollarRate != null && dollarRate! > 0) {
+      convertedAmount = CurrencyConverter.convert(
+        amount: amount, from: currency, dollarRate: dollarRate!);
+    } else {
+      convertedAmount = null;
+    }
+  }
+
+  bool get isPayment => type == TransactionType.payment;
 
   Map<String,dynamic> toJson()=> {
     'id':id,'partyId':partyId,'partyName':partyName,'party':party.index,'type':type.index,
     'amount':amount,'source':source,'reason':reason,'relatedId':relatedId,'createdAt':createdAt.toIso8601String(),'projectId':projectId,
-    'currency':currency.code,'partyPhone':partyPhone
+    'currency':currency.code,'partyPhone':partyPhone,
+    'dollarRate':dollarRate,'convertedAmount':convertedAmount,
   };
   factory TransactionEntry.fromJson(Map<String,dynamic> j)=> TransactionEntry(
-    id:j['id'],partyId:j['partyId'],partyName:j['partyName'],party:TransactionParty.values[j['party']],
+    id:j['id'],partyId:j['partyId'],partyName:j['partyName'],party:TransactionParty.values[(j['party'] as num).toInt().clamp(0, TransactionParty.values.length-1)],
     type:TransactionType.values[j['type']],amount:(j['amount'] as num).toDouble(),source:j['source'],reason:j['reason'],
     relatedId:j['relatedId'],createdAt:DateTime.parse(j['createdAt']),projectId:j['projectId'],
-    currency: AppCurrencyX.fromString(j['currency'] as String?), partyPhone: j['partyPhone'] as String?
+    currency: AppCurrencyX.fromString(j['currency'] as String?), partyPhone: j['partyPhone'] as String?,
+    dollarRate: (j['dollarRate'] as num?)?.toDouble(),
+    convertedAmount: (j['convertedAmount'] as num?)?.toDouble(),
   );
 }
 
@@ -57,7 +86,9 @@ class TransactionEntryAdapter extends TypeAdapter<TransactionEntry> {
     final id = r.readString();
     final partyId = r.readString();
     final partyName = r.readString();
-    final party = TransactionParty.values[r.readInt()];
+    final partyRaw = r.readInt();
+    final party = (partyRaw >= 0 && partyRaw < TransactionParty.values.length)
+        ? TransactionParty.values[partyRaw] : TransactionParty.client;
     final type = TransactionType.values[r.readInt()];
     final amount = r.readDouble();
     final source = r.readString();
@@ -68,6 +99,8 @@ class TransactionEntryAdapter extends TypeAdapter<TransactionEntry> {
     // Backward-compatible: old boxes have no currency/phone trailing fields.
     AppCurrency currency = AppCurrency.syp;
     String? partyPhone;
+    double? dollarRate;
+    double? convertedAmount;
     try {
       currency = AppCurrency.values[r.readInt()];
     } catch (_) {
@@ -79,11 +112,24 @@ class TransactionEntryAdapter extends TypeAdapter<TransactionEntry> {
     } catch (_) {
       partyPhone = null;
     }
+    try {
+      final hasRate = r.readBool();
+      if (hasRate) dollarRate = r.readDouble();
+    } catch (_) {
+      dollarRate = null;
+    }
+    try {
+      final hasConv = r.readBool();
+      if (hasConv) convertedAmount = r.readDouble();
+    } catch (_) {
+      convertedAmount = null;
+    }
     return TransactionEntry(
       id:id,partyId:partyId,partyName:partyName,party:party,
       type:type,amount:amount,source:source,reason:reason,
       relatedId:relatedId,createdAt:createdAt,projectId:projectId,
       currency: currency, partyPhone: partyPhone,
+      dollarRate: dollarRate, convertedAmount: convertedAmount,
     );
   }
   @override void write(BinaryWriter w, TransactionEntry o){
@@ -93,5 +139,7 @@ class TransactionEntryAdapter extends TypeAdapter<TransactionEntry> {
     w.writeInt(o.createdAt.millisecondsSinceEpoch);w.writeBool(o.projectId!=null);if(o.projectId!=null) w.writeString(o.projectId!);
     w.writeInt(o.currency.index);
     w.writeBool(o.partyPhone!=null);if(o.partyPhone!=null) w.writeString(o.partyPhone!);
+    w.writeBool(o.dollarRate!=null);if(o.dollarRate!=null) w.writeDouble(o.dollarRate!);
+    w.writeBool(o.convertedAmount!=null);if(o.convertedAmount!=null) w.writeDouble(o.convertedAmount!);
   }
 }
