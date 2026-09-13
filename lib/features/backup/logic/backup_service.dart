@@ -9,6 +9,8 @@ import '../../../core/database/hive_init.dart';
 import '../../factory/data/models/product.dart';
 import '../../factory/data/models/customer.dart';
 import '../../factory/data/models/invoice.dart';
+import '../../factory/data/models/stock_log.dart';
+import '../../factory/data/models/price_tier.dart';
 import '../../projects/data/models/project.dart';
 import '../../projects/data/models/procedure.dart';
 import '../../finance/data/models/transaction.dart';
@@ -17,11 +19,11 @@ import '../../projects/data/models/site_materials.dart';
 import '../../projects/data/models/site_procedure.dart';
 
 class BackupService {
-  static const String backupVersion = '2.0';
+  static const String backupVersion = '6.0';
   static Map<String,dynamic> _buildJson() {
     final now = DateTime.now();
     return {
-      'metadata': {'version': backupVersion,'createdAt': now.toIso8601String(),'app': 'Factory_Managment','counts': {'products': HiveInit.products.length,'customers': HiveInit.customers.length,'invoices': HiveInit.invoices.length,'projects': HiveInit.projects.length,'procedures': HiveInit.procedures.length,'transactions': HiveInit.transactions.length,'personnel': HiveInit.personnel.length,'requiredMaterials': HiveInit.requiredMaterials.length,'dailyLogs': HiveInit.dailyLogs.length,'siteProcedures': HiveInit.siteProcedures.length}},
+      'metadata': {'version': backupVersion,'createdAt': now.toIso8601String(),'app': 'Factory_Managment','counts': {'products': HiveInit.products.length,'customers': HiveInit.customers.length,'invoices': HiveInit.invoices.length,'projects': HiveInit.projects.length,'procedures': HiveInit.procedures.length,'transactions': HiveInit.transactions.length,'personnel': HiveInit.personnel.length,'requiredMaterials': HiveInit.requiredMaterials.length,'dailyLogs': HiveInit.dailyLogs.length,'siteProcedures': HiveInit.siteProcedures.length,'stockLogs': HiveInit.stockLogs.length,'priceTiers': HiveInit.priceTiers.length}},
       'products': HiveInit.products.values.map((e)=> e.toJson()).toList(),
       'customers': HiveInit.customers.values.map((e)=> e.toJson()).toList(),
       'invoices': HiveInit.invoices.values.map((e)=> e.toJson()).toList(),
@@ -32,6 +34,8 @@ class BackupService {
       'requiredMaterials': HiveInit.requiredMaterials.values.map((e)=> e.toJson()).toList(),
       'dailyLogs': HiveInit.dailyLogs.values.map((e)=> e.toJson()).toList(),
       'siteProcedures': HiveInit.siteProcedures.values.map((e)=> e.toJson()).toList(),
+      'stockLogs': HiveInit.stockLogs.values.map((e)=> e.toJson()).toList(),
+      'priceTiers': HiveInit.priceTiers.values.map((e)=> e.toJson()).toList(),
     };
   }
   static String _timestamp() { final n=DateTime.now(); String two(int v)=> v.toString().padLeft(2,'0'); return '${n.year}-${two(n.month)}-${two(n.day)}_${two(n.hour)}${two(n.minute)}';}
@@ -187,13 +191,13 @@ class BackupService {
     const req=['products','customers','invoices','projects','procedures','transactions','metadata'];
     for(final k in req) if(!d.containsKey(k)) throw Exception('Invalid backup: missing $k');
     // Version check (v1 backups lack new keys — default them to []).
-    for (final k in ['personnel','requiredMaterials','dailyLogs','siteProcedures']) {
+    for (final k in ['personnel','requiredMaterials','dailyLogs','siteProcedures','stockLogs','priceTiers']) {
       d.putIfAbsent(k, ()=> []);
     }
     try {
       final meta = Map<String,dynamic>.from(d['metadata'] as Map);
       final v = meta['version']?.toString() ?? '';
-      if (v.isNotEmpty && v != backupVersion && !v.startsWith('1.') && !v.startsWith('2.')) {
+      if (v.isNotEmpty && v != backupVersion && !v.startsWith('1.') && !v.startsWith('2.') && !v.startsWith('3.') && !v.startsWith('4.') && !v.startsWith('5.') && !v.startsWith('6.')) {
         throw Exception('إصدار نسخة غير مدعوم: $v (المدعوم $backupVersion)');
       }
     } catch (e) {
@@ -210,7 +214,7 @@ class BackupService {
       if(!pIds.contains(m['projectId'])) throw Exception('FK violation: procedure ${m['id']}');
     }
   }
-  static Future<void> _clearAll() async { await HiveInit.products.clear(); await HiveInit.customers.clear(); await HiveInit.invoices.clear(); await HiveInit.projects.clear(); await HiveInit.procedures.clear(); await HiveInit.transactions.clear(); await HiveInit.personnel.clear(); await HiveInit.requiredMaterials.clear(); await HiveInit.dailyLogs.clear(); await HiveInit.siteProcedures.clear();}
+  static Future<void> _clearAll() async { await HiveInit.products.clear(); await HiveInit.customers.clear(); await HiveInit.invoices.clear(); await HiveInit.projects.clear(); await HiveInit.procedures.clear(); await HiveInit.transactions.clear(); await HiveInit.personnel.clear(); await HiveInit.requiredMaterials.clear(); await HiveInit.dailyLogs.clear(); await HiveInit.siteProcedures.clear(); await HiveInit.stockLogs.clear(); await HiveInit.priceTiers.clear();}
   static Future<void> _restore(Map<String,dynamic> d, {Map<String,String> restoredImagePaths = const {}}) async {
     String _remapPhoto(String old) {
       if (restoredImagePaths.isEmpty) return old;
@@ -233,7 +237,9 @@ class BackupService {
     for(final j in (d['requiredMaterials'] as List? ?? [])) { final m = Map<String,dynamic>.from(j as Map); await HiveInit.requiredMaterials.put(m['id'], RequiredMaterial.fromJson(m)); }
     for(final j in (d['dailyLogs'] as List? ?? [])) { final m = Map<String,dynamic>.from(j as Map); await HiveInit.dailyLogs.put(m['id'], DailyLog.fromJson(m)); }
     for(final j in (d['siteProcedures'] as List? ?? [])) { final m = Map<String,dynamic>.from(j as Map); await HiveInit.siteProcedures.put(m['id'], SiteProcedure.fromJson(m)); }
+    for(final j in (d['stockLogs'] as List? ?? [])) { final m = Map<String,dynamic>.from(j as Map); await HiveInit.stockLogs.put(m['id'], StockLog.fromJson(m)); }
+    for(final j in (d['priceTiers'] as List? ?? [])) { final m = Map<String,dynamic>.from(j as Map); await HiveInit.priceTiers.put(m['id'], ProductPriceTier.fromJson(m)); }
   }
-  static Map<String,dynamic> get jsonSchema=> {"\$schema":"factory_backup v2.0","metadata":{"version":"string","createdAt":"ISO8601"},"products":[{"id":"uuid FK"}],"customers":[{"id":"uuid PK"}],"invoices":[{"customerId":"FK -> customers.id"}],"projects":[{"clientId":"FK"}],"procedures":[{"projectId":"FK -> projects.id"}],"transactions":[{"partyId":"FK"}],"personnel":[{"role":"worker|master|supplier|driver"}],"requiredMaterials":[{"projectId":"FK -> projects.id"}],"dailyLogs":[{"projectId":"FK -> projects.id"}],"siteProcedures":[{"projectId":"FK","dailyLogId":"FK -> dailyLogs.id"}]};
+  static Map<String,dynamic> get jsonSchema=> {"\$schema":"factory_backup v6.0","metadata":{"version":"string","createdAt":"ISO8601"},"products":[{"id":"uuid FK"}],"customers":[{"id":"uuid PK"}],"invoices":[{"customerId":"FK -> customers.id","items":[{"productId":"FK","unitPrice":"invoice-scoped custom price"}],"downPayment":"first payment preview","currency":"SYP fixed"}],"projects":[{"clientId":"FK","currency":"SYP fixed"}],"procedures":[{"projectId":"FK -> projects.id"}],"transactions":[{"partyId":"FK","currency":"SYP fixed","dollarRate":"audit","convertedAmount":"audit"}],"personnel":[{"role":"worker|master|supplier|driver","suppliedMaterials":"supplier items text"}],"requiredMaterials":[{"projectId":"FK -> projects.id","supplierId":"FK -> personnel.id","supplierName":"denormalized","supplierPhone":"denormalized","downPayment":"initial supplier payment SYP"}],"dailyLogs":[{"projectId":"FK -> projects.id"}],"siteProcedures":[{"projectId":"FK","dailyLogId":"FK -> dailyLogs.id"}],"stockLogs":[{"productId":"FK -> products.id","quantityAdded":"restock qty","purchaseCost":"batch total cost","downPayment":"initial supplier payment SYP","suppliedMaterials":"supplier catalog text"}],"priceTiers":[{"productId":"FK -> products.id","unitPrice":"catalog price","startedAt":"interval start","endedAt":"interval end or null=active"}]};
 }
 enum RestoreResult { success, cancelled, failed }

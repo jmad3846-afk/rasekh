@@ -3,6 +3,8 @@ import '../../core/utils/currency.dart';
 import '../../features/factory/data/models/product.dart';
 import '../../features/factory/data/models/customer.dart';
 import '../../features/factory/data/models/invoice.dart';
+import '../../features/factory/data/models/stock_log.dart';
+import '../../features/factory/data/models/price_tier.dart';
 import '../../features/projects/data/models/project.dart';
 import '../../features/projects/data/models/procedure.dart';
 import '../../features/finance/data/models/transaction.dart';
@@ -37,6 +39,8 @@ class HiveInit {
     Hive.registerAdapter(SiteProcedureKindAdapter());
     Hive.registerAdapter(MasterContractTypeAdapter());
     Hive.registerAdapter(ConsumedMaterialAdapter());
+    Hive.registerAdapter(StockLogAdapter());
+    Hive.registerAdapter(ProductPriceTierAdapter());
 
     await Future.wait([
       Hive.openBox<Product>('products'),
@@ -49,6 +53,8 @@ class HiveInit {
       Hive.openBox<RequiredMaterial>('required_materials'),
       Hive.openBox<DailyLog>('daily_logs'),
       Hive.openBox<SiteProcedure>('site_procedures'),
+      Hive.openBox<StockLog>('stock_logs'),
+      Hive.openBox<ProductPriceTier>('price_tiers'),
     ]);
   }
 
@@ -62,4 +68,6 @@ class HiveInit {
   static Box<RequiredMaterial> get requiredMaterials => Hive.box<RequiredMaterial>('required_materials');
   static Box<DailyLog> get dailyLogs => Hive.box<DailyLog>('daily_logs');
   static Box<SiteProcedure> get siteProcedures => Hive.box<SiteProcedure>('site_procedures');
+  static Box<StockLog> get stockLogs => Hive.box<StockLog>('stock_logs');
+  static Box<ProductPriceTier> get priceTiers => Hive.box<ProductPriceTier>('price_tiers');
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -9,8 +10,12 @@ import '../../../../core/utils/money.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../data/models/transaction.dart';
 import '../../logic/finance_engine.dart';
+import '../../../factory/presentation/screens/inventory_suppliers_screen.dart';
 
-/// Req #2 / #5 / #6: streamlined financial ledger.
+/// Req #2 / #5 / #6 + Sprint 2026-09 Task 3: strictly separated finance.
+/// Tab 0 = Client/Factory ONLY (factory invoices, no project link).
+/// Tab 1 = Project/Contracting (project list -> 4-role workspace).
+/// Tab 2 = Inventory Suppliers (موردو مخزون المعمل, factory scope only).
 class LedgerScreen extends ConsumerStatefulWidget {
   const LedgerScreen({super.key});
   @override ConsumerState<LedgerScreen> createState()=> _S();
@@ -20,14 +25,16 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
   final searchCtrl = TextEditingController();
   String personQuery = '';
 
-  @override void initState(){ super.initState(); tab=TabController(length:5, vsync:this); }
+  @override void initState(){ super.initState(); tab=TabController(length:3, vsync:this); }
   @override void dispose(){ tab.dispose(); searchCtrl.dispose(); super.dispose(); }
 
   @override Widget build(BuildContext context){
     ref.watch(transactionsProvider);
     return Scaffold(
       appBar: AppBar(title: Text('المالية والذمم', style: GoogleFonts.cairo(fontWeight: FontWeight.w800)), bottom: TabBar(controller:tab, labelColor: Colors.white, unselectedLabelColor: Colors.white60, indicatorColor: AppColors.gold, isScrollable:true, tabs: const [
-        Tab(text:'العملاء'), Tab(text:'المعلمين'), Tab(text:'العمال'), Tab(text:'الموردين'), Tab(text:'السائقين'),
+        Tab(text:'مالية المعمل والعملاء', icon: Icon(Icons.factory_outlined, size: 18)),
+        Tab(text:'مالية التعهدات', icon: Icon(Icons.business_outlined, size: 18)),
+        Tab(text:'موردو المخزون', icon: Icon(Icons.local_shipping_outlined, size: 18)),
       ])),
       body: Column(children:[
         // ── Unified person search (Req #6, no filter chips) ──
@@ -51,11 +58,9 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
         ),
         if (personQuery.trim().isNotEmpty) _personTimeline(),
         Expanded(child: TabBarView(controller:tab, children:[
-          _partyTab(TransactionParty.client),
-          _partyTab(TransactionParty.master),
-          _partyTab(TransactionParty.worker),
-          _partyTab(TransactionParty.supplier),
-          _partyTab(TransactionParty.driver),
+          _factoryClientsTab(),
+          _contractingProjectsTab(),
+          const InventorySuppliersTab(),
         ])),
       ]),
     );
@@ -91,11 +96,11 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
               Expanded(child: Text('كشف موحد: ${first.partyName} (${all.length} حركة)', style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize:13), overflow: TextOverflow.ellipsis)),
             ]),
             const SizedBox(height:8),
-            // Req #6 top summary cards
+            // Req #6 top summary cards — strictly ل.س
             Row(children:[
-              Expanded(child: _summaryCard('المتبقي للدفع', Money.format(s.remaining), AppColors.error, AppColors.errorBg, Icons.account_balance_wallet_outlined)),
+              Expanded(child: _summaryCard('المتبقي للدفع', Money.withCurrency(s.remaining, AppCurrency.syp), AppColors.error, AppColors.errorBg, Icons.account_balance_wallet_outlined)),
               const SizedBox(width:8),
-              Expanded(child: _summaryCard('مجموع المدفوع', Money.format(s.paid), AppColors.success, AppColors.successBg, Icons.check_circle_outline)),
+              Expanded(child: _summaryCard('مجموع المدفوع', Money.withCurrency(s.paid, AppCurrency.syp), AppColors.success, AppColors.successBg, Icons.check_circle_outline)),
             ]),
             const SizedBox(height:8),
             SizedBox(
@@ -143,7 +148,10 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
 
   Widget _txRow(TransactionEntry t, {bool showActions = false}) {
     final isDebt = t.type == TransactionType.debit || (t.party != TransactionParty.client && t.type == TransactionType.credit);
-    return Row(children:[
+    return InkWell(
+      onTap: () => showTransactionDetail(context, t),
+      borderRadius: BorderRadius.circular(8),
+      child: Row(children:[
       Icon(t.type==TransactionType.debit? Icons.arrow_upward: t.type==TransactionType.credit? Icons.arrow_downward: Icons.check_circle, size:14, color: t.type==TransactionType.payment ? AppColors.success : (isDebt ? AppColors.error : AppColors.success)),
       const SizedBox(width:6),
       Expanded(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
@@ -184,7 +192,7 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
             ),
           ]),
       ]),
-    ]);
+    ]));
   }
 
   String _partyLabel(TransactionParty p) {
@@ -197,60 +205,206 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
     }
   }
 
-  Widget _partyTab(TransactionParty party){
-    final txs = HiveInit.transactions.values.where((t)=> t.party==party).toList();
-    // group by partyId
-    final Map<String, List<TransactionEntry>> grouped={};
-    for(final t in txs){ grouped.putIfAbsent(t.partyId, ()=> []).add(t); }
-    if(grouped.isEmpty) return Center(child: Text('لا توجد حركات', style: GoogleFonts.cairo(color: AppColors.textSecondary)));
-
+  /// Sprint 2026-09 Task 3.1: factory-only clients (no project link).
+  Widget _factoryClientsTab() {
+    final txs = FinanceEngine.factoryClientLedger();
+    final Map<String, List<TransactionEntry>> grouped = {};
+    for (final t in txs) {
+      grouped.putIfAbsent(t.partyId, () => []).add(t);
+    }
+    if (grouped.isEmpty) {
+      return Center(
+          child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                  'لا توجد ديون معمل/عملاء — فواتير المصنع فقط تظهر هنا',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.cairo(color: AppColors.textSecondary))));
+    }
     return ListView.separated(
-      padding: const EdgeInsets.all(16), itemCount: grouped.length,
-      separatorBuilder: (_,__)=> const SizedBox(height:12),
-      itemBuilder: (_,i){
+      padding: const EdgeInsets.all(16),
+      itemCount: grouped.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) {
         final partyId = grouped.keys.elementAt(i);
-        final list = grouped[partyId]!..sort((a,b)=> b.createdAt.compareTo(a.createdAt));
+        final list = grouped[partyId]!
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
         final name = list.first.partyName;
         final phone = list.first.partyPhone ?? partyId;
-        // Per-currency balances (never mix SYP+USD).
-        final balSyp = FinanceEngine.balanceFor(partyId, party, currency: AppCurrency.syp);
-        final balUsd = FinanceEngine.balanceFor(partyId, party, currency: AppCurrency.usd);
-        final hasSyp = list.any((t)=> t.currency == AppCurrency.syp);
-        final hasUsd = list.any((t)=> t.currency == AppCurrency.usd);
-        final isDebt = (balSyp + balUsd) > 0;
-        return GlassCard(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
-          Row(children:[
-            Container(width:44,height:44, decoration: BoxDecoration(color: party==TransactionParty.client? AppColors.errorBg: AppColors.goldLight, borderRadius: BorderRadius.circular(10)), child: Icon(_partyIcon(party), color: party==TransactionParty.client? AppColors.error: AppColors.goldDark)),
-            const SizedBox(width:12),
-            Expanded(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
-              Text(name, style: GoogleFonts.cairo(fontWeight: FontWeight.w800), overflow: TextOverflow.ellipsis),
-              Text(phone, style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary), overflow: TextOverflow.ellipsis),
-              Text('${list.length} حركة', style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary)),
-            ])),
-            Column(crossAxisAlignment:CrossAxisAlignment.end, children:[
-              if (hasSyp) Text(Money.withCurrency(balSyp.abs(), AppCurrency.syp), style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize:12, color: balSyp>0? AppColors.error: AppColors.success)),
-              if (hasUsd) Text(Money.withCurrency(balUsd.abs(), AppCurrency.usd), style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize:12, color: balUsd>0? AppColors.error: AppColors.success)),
-              Text(isDebt? (party==TransactionParty.client?'مستحق':'له'): 'مسدد', style: GoogleFonts.cairo(fontSize:11,color: isDebt?AppColors.error:AppColors.success)),
-            ])
-          ]),
-          const Divider(height:16),
-          ...list.take(3).map((t)=> Padding(padding: const EdgeInsets.only(bottom:6), child: _txRow(t))),
-          if(list.length>3) TextButton(onPressed: ()=> _showDetail(partyId, party, list), child: Text('عرض كل الحركات (${list.length})', style: GoogleFonts.cairo(fontSize:12))),
-          const SizedBox(height:4),
-          SizedBox(width:double.infinity, child: OutlinedButton.icon(onPressed: ()=> showPaymentDialog(context: context, party: party, partyId: partyId, partyName: name, partyPhone: phone == partyId ? null : phone, initialCurrency: list.first.currency, onSaved: ()=> setState(()=>{})), icon: const Icon(Icons.payments_outlined, size:16), label: Text('تسجيل دفعة', style: GoogleFonts.cairo(fontSize:12)))),
-        ]));
+        final bal = FinanceEngine.scopedRemaining(
+            partyId: partyId, party: TransactionParty.client);
+        final paid =
+            list.where((t) => t.type == TransactionType.payment).fold(0.0, (s, e) => s + e.amount);
+        final isDebt = bal > 0.005;
+        return GlassCard(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              Row(children: [
+                Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                        color: AppColors.errorBg,
+                        borderRadius: BorderRadius.circular(10)),
+                    child: const Icon(Icons.person, color: AppColors.error)),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(name,
+                          style: GoogleFonts.cairo(
+                              fontWeight: FontWeight.w800),
+                          overflow: TextOverflow.ellipsis),
+                      Text(phone,
+                          style: GoogleFonts.cairo(
+                              fontSize: 11,
+                              color: AppColors.textSecondary),
+                          overflow: TextOverflow.ellipsis),
+                      Text('${list.length} حركة • معمل فقط',
+                          style: GoogleFonts.cairo(
+                              fontSize: 11,
+                              color: AppColors.textSecondary)),
+                    ])),
+                Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(Money.withCurrency(bal.abs(), AppCurrency.syp),
+                          style: GoogleFonts.cairo(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                              color: bal > 0
+                                  ? AppColors.error
+                                  : AppColors.success)),
+                      Text(isDebt ? 'مستحق' : 'مسدد',
+                          style: GoogleFonts.cairo(
+                              fontSize: 11,
+                              color: isDebt
+                                  ? AppColors.error
+                                  : AppColors.success)),
+                    ])
+              ]),
+              const Divider(height: 16),
+              ...list
+                  .take(3)
+                  .map((t) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _txRow(t))),
+              if (list.length > 3)
+                TextButton(
+                    onPressed: () => _showDetail(
+                        partyId, TransactionParty.client, list),
+                    child: Text('عرض كل الحركات (${list.length})',
+                        style: GoogleFonts.cairo(fontSize: 12))),
+              const SizedBox(height: 4),
+              Row(children: [
+                Expanded(
+                    child: Text(
+                        'مدفوع ${Money.withCurrency(paid, AppCurrency.syp)}',
+                        style: GoogleFonts.cairo(
+                            fontSize: 11,
+                            color: AppColors.textSecondary))),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: OutlinedButton.icon(
+                      onPressed: () => showPaymentDialog(
+                          context: context,
+                          party: TransactionParty.client,
+                          partyId: partyId,
+                          partyName: name,
+                          partyPhone: phone == partyId ? null : phone,
+                          projectId: null,
+                          initialCurrency: AppCurrency.syp,
+                          onSaved: () => setState(() {})),
+                      icon: const Icon(Icons.payments_outlined, size: 16),
+                      label: Text('تسجيل دفعة',
+                          style: GoogleFonts.cairo(fontSize: 12))),
+                ),
+              ]),
+            ]));
       },
     );
   }
 
-  IconData _partyIcon(TransactionParty p) {
-    switch (p) {
-      case TransactionParty.client: return Icons.person;
-      case TransactionParty.master: return Icons.engineering;
-      case TransactionParty.worker: return Icons.groups;
-      case TransactionParty.supplier: return Icons.local_shipping;
-      case TransactionParty.driver: return Icons.drive_eta;
+  /// Sprint 2026-09 Task 3.2: contracting project list -> workspace.
+  Widget _contractingProjectsTab() {
+    final projects = HiveInit.projects.values.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    if (projects.isEmpty) {
+      return Center(
+          child: Text('لا توجد مشاريع بعد',
+              style: GoogleFonts.cairo(color: AppColors.textSecondary)));
     }
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: projects.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, i) {
+        final pr = projects[i];
+        final balances =
+            FinanceEngine.personnelBalancesForProject(pr.id);
+        final pending = balances.values
+            .where((b) => b.remaining > 0.005)
+            .toList();
+        final totalPending =
+            pending.fold(0.0, (s, b) => s + b.remaining);
+        final totalPaid =
+            balances.values.fold(0.0, (s, b) => s + b.paid);
+        return GlassCard(
+          onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) =>
+                      ProjectFinanceWorkspace(projectId: pr.id))),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                          color: AppColors.goldLight,
+                          borderRadius: BorderRadius.circular(10)),
+                      child: const Icon(Icons.business,
+                          color: AppColors.goldDark)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                        Text(pr.location,
+                            style: GoogleFonts.cairo(
+                                fontWeight: FontWeight.w800),
+                            overflow: TextOverflow.ellipsis),
+                        Text(
+                            '${pr.clientName} • ${pending.length} شخص معلق • مدفوع ${Money.withCurrency(totalPaid, AppCurrency.syp)}',
+                            style: GoogleFonts.cairo(
+                                fontSize: 11,
+                                color: AppColors.textSecondary)),
+                      ])),
+                  const Icon(Icons.arrow_forward_ios,
+                      size: 14, color: AppColors.textSecondary),
+                ]),
+                const SizedBox(height: 6),
+                Text(
+                    'المتبقي ${Money.withCurrency(totalPending, AppCurrency.syp)}',
+                    style: GoogleFonts.cairo(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        color: totalPending > 0
+                            ? AppColors.error
+                            : AppColors.success)),
+                Text('اضغط لفتح مساحة المشروع (عمال • معلمين • موردين • سائقين)',
+                    style: GoogleFonts.cairo(
+                        fontSize: 10, color: AppColors.goldDark)),
+              ]),
+        );
+      },
+    );
   }
 
   void _showDetail(String partyId, TransactionParty party, List<TransactionEntry> list){
@@ -294,11 +448,203 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
 }
 
 // ─────────────────────────────────────────────────────────────
-// Req #2: live dynamic currency conversion payment dialog.
+// Sprint 2026-09 Task 3.3: dedicated per-project financial workspace
+// with 4 structured sub-tabs (workers/masters/suppliers/drivers).
+// ─────────────────────────────────────────────────────────────
+class ProjectFinanceWorkspace extends ConsumerStatefulWidget {
+  final String projectId;
+  const ProjectFinanceWorkspace({super.key, required this.projectId});
+  @override
+  ConsumerState<ProjectFinanceWorkspace> createState() => _W();
+}
+
+class _W extends ConsumerState<ProjectFinanceWorkspace>
+    with SingleTickerProviderStateMixin {
+  late TabController tab;
+  @override
+  void initState() {
+    super.initState();
+    tab = TabController(length: 4, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    tab.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.watch(transactionsProvider);
+    final project = HiveInit.projects.get(widget.projectId);
+    final title = project?.location ?? 'مساحة المشروع';
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('مالية $title',
+            style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize: 15)),
+        bottom: TabBar(
+            controller: tab,
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white60,
+            indicatorColor: AppColors.gold,
+            isScrollable: true,
+            tabs: const [
+              Tab(text: 'العمال', icon: Icon(Icons.groups, size: 18)),
+              Tab(text: 'المعلمين', icon: Icon(Icons.engineering, size: 18)),
+              Tab(text: 'الموردين', icon: Icon(Icons.local_shipping, size: 18)),
+              Tab(text: 'السائقين', icon: Icon(Icons.drive_eta, size: 18)),
+            ]),
+      ),
+      body: TabBarView(controller: tab, children: [
+        _roleTab(TransactionParty.worker, 'عامل'),
+        _roleTab(TransactionParty.master, 'معلم'),
+        _roleTab(TransactionParty.supplier, 'مورد'),
+        _roleTab(TransactionParty.driver, 'سائق'),
+      ]),
+    );
+  }
+
+  Widget _roleTab(TransactionParty party, String label) {
+    final balances =
+        FinanceEngine.personnelBalancesForProject(widget.projectId);
+    final entries = balances.entries
+        .where((e) => e.value.party == party)
+        .toList()
+      ..sort((a, b) => b.value.remaining.compareTo(a.value.remaining));
+    if (entries.isEmpty) {
+      return Center(
+          child: Text('لا يوجد $label في هذا المشروع',
+              style: GoogleFonts.cairo(color: AppColors.textSecondary)));
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: entries.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (_, i) {
+        final key = entries[i].key;
+        final b = entries[i].value;
+        final parts = key.split('|');
+        final pid =
+            parts.length > 1 ? parts.sublist(1).join('|') : key;
+        final txs = HiveInit.transactions.values
+            .where((t) =>
+                t.projectId == widget.projectId &&
+                t.party == party &&
+                t.partyId == pid)
+            .toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        final isSettled = b.remaining <= 0.005;
+        return GlassCard(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              Row(children: [
+                Expanded(
+                    child: Text(b.name,
+                        style:
+                            GoogleFonts.cairo(fontWeight: FontWeight.w800),
+                        overflow: TextOverflow.ellipsis)),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: isSettled
+                          ? AppColors.successBg
+                          : AppColors.errorBg,
+                      borderRadius: BorderRadius.circular(20)),
+                  child: Text(isSettled ? 'خالص' : 'متبقي',
+                      style: GoogleFonts.cairo(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: isSettled
+                              ? AppColors.success
+                              : AppColors.error)),
+                ),
+              ]),
+              Text('${b.phone} • $label • ${txs.length} حركة',
+                  style: GoogleFonts.cairo(
+                      fontSize: 11, color: AppColors.textSecondary)),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(
+                    child: Text(
+                        'متبقي ${Money.withCurrency(b.remaining, AppCurrency.syp)}',
+                        style: GoogleFonts.cairo(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: isSettled
+                                ? AppColors.success
+                                : AppColors.error))),
+                Expanded(
+                    child: Text(
+                        'مدفوع ${Money.withCurrency(b.paid, AppCurrency.syp)}',
+                        style: GoogleFonts.cairo(
+                            fontSize: 11,
+                            color: AppColors.textSecondary),
+                        textAlign: TextAlign.end)),
+              ]),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => showPaymentDialog(
+                    context: context,
+                    party: party,
+                    partyId: pid,
+                    partyName: b.name,
+                    partyPhone:
+                        b.phone == pid ? null : b.phone,
+                    projectId: widget.projectId,
+                    initialCurrency: AppCurrency.syp,
+                    onSaved: () => setState(() {}),
+                  ),
+                  icon:
+                      const Icon(Icons.payments_outlined, size: 16),
+                  label: Text('دفع دفعة / قبض',
+                      style: GoogleFonts.cairo(fontSize: 12)),
+                ),
+              ),
+              if (txs.isNotEmpty) ...[
+                const Divider(height: 16),
+                ...txs.take(3).map((t) => Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Row(children: [
+                        Expanded(
+                            child: Text(t.source,
+                                style: GoogleFonts.cairo(fontSize: 11),
+                                overflow: TextOverflow.ellipsis)),
+                        Text(
+                            '${t.type == TransactionType.payment ? '-' : '+'}${Money.withCurrency(t.amount, AppCurrency.syp)}',
+                            style: GoogleFonts.cairo(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: t.type ==
+                                        TransactionType.payment
+                                    ? AppColors.success
+                                    : AppColors.error)),
+                      ]),
+                    )),
+                if (txs.length > 3)
+                  Text('${txs.length - 3} حركات أخرى...',
+                      style: GoogleFonts.cairo(
+                          fontSize: 10,
+                          color: AppColors.textSecondary)),
+              ],
+            ]));
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Single-currency SYP payment engine with dynamic USD calculator.
 // Shared entry point used by ledger, dashboard debt views, personnel.
+// Final ledger ALWAYS logs ل.س.
 // ─────────────────────────────────────────────────────────────
 
-/// Record a payment with live FX conversion + audit persistence.
+enum PayMode { syp, usd }
+
+/// Record a payment: mode ل.س (direct) or دولار (USD amount × rate → ل.س).
 Future<void> showPaymentDialog({
   required BuildContext context,
   required TransactionParty party,
@@ -309,56 +655,165 @@ Future<void> showPaymentDialog({
   AppCurrency initialCurrency = AppCurrency.syp,
   VoidCallback? onSaved,
 }) {
-  final amountCtrl = TextEditingController();
+  final sypCtrl = TextEditingController();
+  final usdCtrl = TextEditingController();
   final rateCtrl = TextEditingController();
   final noteCtrl = TextEditingController(text: 'دفعة مسددة');
-  AppCurrency payCur = initialCurrency;
+  PayMode mode = PayMode.syp;
+  String? errorMsg;
 
   return showDialog(
     context: context,
     builder: (_) => StatefulBuilder(builder: (ctx, setD) {
-      final amt = double.tryParse(amountCtrl.text) ?? 0;
-      final rate = double.tryParse(rateCtrl.text);
+      final sypAmt = double.tryParse(sypCtrl.text) ?? 0;
+      final usdAmt = double.tryParse(usdCtrl.text) ?? 0;
+      final rate = double.tryParse(rateCtrl.text) ?? 0;
+      final converted = (usdAmt > 0 && rate > 0) ? usdAmt * rate : 0.0;
+      final effectiveSyp = mode == PayMode.syp ? sypAmt : converted;
+      // Sprint 2026-09 Task 4: live remaining for overpayment guard.
+      final remaining = FinanceEngine.scopedRemaining(
+          partyId: partyId, party: party, projectId: projectId);
+      final overLimit = effectiveSyp > remaining + 0.005;
       return AlertDialog(
         title: Text('تسجيل دفعة - $partyName',
             style: GoogleFonts.cairo(fontSize: 15, fontWeight: FontWeight.w800)),
         content: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            TextField(
-                controller: amountCtrl,
-                onChanged: (_) => setD(() {}),
-                decoration: const InputDecoration(labelText: 'المبلغ *'),
-                keyboardType: TextInputType.number),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                  color: AppColors.background,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.border)),
+              child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('المبلغ المتبقي المستحق',
+                        style: GoogleFonts.cairo(
+                            fontSize: 12, fontWeight: FontWeight.w700)),
+                    Flexible(
+                        child: Text(
+                            Money.withCurrency(
+                                remaining, AppCurrency.syp),
+                            style: GoogleFonts.cairo(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                                color: remaining > 0
+                                    ? AppColors.error
+                                    : AppColors.success))),
+                  ]),
+            ),
             const SizedBox(height: 12),
             Row(children: [
-              Text('العملة:', style: GoogleFonts.cairo(fontSize: 12)),
+              Text('طريقة الدفع:', style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700)),
               const SizedBox(width: 8),
               ChoiceChip(
                   label: Text('ل.س', style: GoogleFonts.cairo(fontSize: 12)),
-                  selected: payCur == AppCurrency.syp,
-                  onSelected: (_) => setD(() => payCur = AppCurrency.syp)),
+                  selected: mode == PayMode.syp,
+                  onSelected: (_) => setD(() => mode = PayMode.syp)),
               const SizedBox(width: 8),
               ChoiceChip(
-                  label: Text('\$', style: GoogleFonts.cairo(fontSize: 12)),
-                  selected: payCur == AppCurrency.usd,
-                  onSelected: (_) => setD(() => payCur = AppCurrency.usd)),
+                  label: Text('دولار', style: GoogleFonts.cairo(fontSize: 12)),
+                  selected: mode == PayMode.usd,
+                  onSelected: (_) => setD(() => mode = PayMode.usd)),
             ]),
             const SizedBox(height: 12),
-            TextField(
-                controller: rateCtrl,
-                onChanged: (_) => setD(() {}),
-                decoration: const InputDecoration(
-                    labelText: 'سعر صرف الدولار *',
-                    hintText: 'مثال: 12000',
-                    prefixIcon: Icon(Icons.currency_exchange, size: 18)),
-                keyboardType: TextInputType.number),
-            const SizedBox(height: 12),
-            // Req #2 live preview (both cases).
-            FxPreview(amount: amt, currency: payCur, dollarRate: rate),
+            if (mode == PayMode.syp) ...[
+              TextField(
+                  controller: sypCtrl,
+                  onChanged: (_) => setD(() {}),
+                  decoration: const InputDecoration(
+                      labelText: 'المبلغ بالليرة (ل.س) *',
+                      prefixIcon: Icon(Icons.payments_outlined, size: 18)),
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: AppColors.successBg, borderRadius: BorderRadius.circular(10)),
+                child: Text('سيُسجَّل في الدفتر: ${Money.withCurrency(sypAmt, AppCurrency.syp)}',
+                    style: GoogleFonts.cairo(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.deepNavy)),
+              ),
+            ] else ...[
+              TextField(
+                  controller: usdCtrl,
+                  onChanged: (_) => setD(() {}),
+                  decoration: const InputDecoration(
+                      labelText: 'المبلغ بالدولار *',
+                      prefixIcon: Icon(Icons.attach_money, size: 18)),
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]),
+              const SizedBox(height: 8),
+              TextField(
+                  controller: rateCtrl,
+                  onChanged: (_) => setD(() {}),
+                  decoration: const InputDecoration(
+                      labelText: 'قيمة الدولار اليوم (ل.س) *',
+                      hintText: 'مثال: 12000',
+                      prefixIcon: Icon(Icons.currency_exchange, size: 18)),
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: AppColors.goldLight, borderRadius: BorderRadius.circular(10)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(usdAmt > 0 && rate > 0
+                      ? '${usdAmt.toStringAsFixed(2)} \$ × ${rate.toStringAsFixed(0)}'
+                      : 'أدخل المبلغ وسعر الصرف لعرض المعادل',
+                      style: GoogleFonts.cairo(fontSize: 11, color: AppColors.goldDark)),
+                  Text('الإجمالي بالليرة: ${Money.withCurrency(converted, AppCurrency.syp)}',
+                      style: GoogleFonts.cairo(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.deepNavy)),
+                ]),
+              ),
+            ],
             const SizedBox(height: 12),
             TextField(
                 controller: noteCtrl,
                 decoration: const InputDecoration(labelText: 'ملاحظات')),
+            if (overLimit && effectiveSyp > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                      color: AppColors.errorBg,
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Row(children: [
+                    const Icon(Icons.error_outline,
+                        size: 16, color: AppColors.error),
+                    const SizedBox(width: 6),
+                    Expanded(
+                        child: Text(
+                            'المبلغ المدخل أكبر من المتبقي المستحق',
+                            style: GoogleFonts.cairo(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.error))),
+                  ]),
+                ),
+              ),
+            if (errorMsg != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                      color: AppColors.errorBg,
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Row(children: [
+                    const Icon(Icons.error_outline,
+                        size: 16, color: AppColors.error),
+                    const SizedBox(width: 6),
+                    Expanded(
+                        child: Text(errorMsg!,
+                            style: GoogleFonts.cairo(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.error))),
+                  ]),
+                ),
+              ),
           ]),
         ),
         actions: [
@@ -367,27 +822,43 @@ Future<void> showPaymentDialog({
               child: Text('إلغاء', style: GoogleFonts.cairo())),
           ElevatedButton(
               onPressed: () async {
-                final a = double.tryParse(amountCtrl.text) ?? 0;
-                if (a <= 0) return;
-                final r = double.tryParse(rateCtrl.text);
-                await FinanceEngine.addPayment(
-                  party: party, partyId: partyId, partyName: partyName,
-                  partyPhone: partyPhone, amount: a,
-                  source: 'دفعة مسددة - $partyName',
-                  reason: noteCtrl.text.isEmpty ? 'دفعة مسددة' : noteCtrl.text,
-                  projectId: projectId, currency: payCur, dollarRate: r,
-                );
+                if (effectiveSyp <= 0) return;
+                // Sprint 2026-09 Task 4: block overpayment.
+                if (effectiveSyp > remaining + 0.005) {
+                  setD(() => errorMsg =
+                      'المبلغ المدخل أكبر من المتبقي المستحق');
+                  return;
+                }
+                if (mode == PayMode.usd) {
+                  if (usdAmt <= 0 || rate <= 0) return;
+                  await FinanceEngine.addPayment(
+                    party: party, partyId: partyId, partyName: partyName,
+                    partyPhone: partyPhone, amount: converted,
+                    source: 'دفعة مسددة - $partyName (${usdAmt.toStringAsFixed(2)}\$ بسعر ${rate.toStringAsFixed(0)})',
+                    reason: noteCtrl.text.isEmpty ? 'دفعة مسددة' : noteCtrl.text,
+                    projectId: projectId, currency: AppCurrency.syp,
+                    dollarRate: rate,
+                  );
+                } else {
+                  await FinanceEngine.addPayment(
+                    party: party, partyId: partyId, partyName: partyName,
+                    partyPhone: partyPhone, amount: sypAmt,
+                    source: 'دفعة مسددة - $partyName',
+                    reason: noteCtrl.text.isEmpty ? 'دفعة مسددة' : noteCtrl.text,
+                    projectId: projectId, currency: AppCurrency.syp,
+                  );
+                }
                 if (context.mounted) Navigator.pop(context);
                 onSaved?.call();
               },
-              child: Text('تأكيد', style: GoogleFonts.cairo())),
+              child: Text('تأكيد (${Money.withCurrency(effectiveSyp, AppCurrency.syp)})', style: GoogleFonts.cairo())),
         ],
       );
     }),
   );
 }
 
-/// Req #5: edit a recorded payment (amount, notes, date, rate) with recalc.
+/// Edit a recorded payment (SYP ledger; optional FX audit fields).
 Future<void> showEditPaymentDialog({
   required BuildContext context,
   required TransactionEntry payment,
@@ -397,48 +868,81 @@ Future<void> showEditPaymentDialog({
   final rateCtrl =
       TextEditingController(text: payment.dollarRate?.toString() ?? '');
   final noteCtrl = TextEditingController(text: payment.reason);
-  AppCurrency payCur = payment.currency;
   DateTime date = payment.createdAt;
+  String? errorMsg;
 
   return showDialog(
     context: context,
     builder: (_) => StatefulBuilder(builder: (ctx, setD) {
-      final amt = double.tryParse(amountCtrl.text) ?? 0;
-      final rate = double.tryParse(rateCtrl.text);
+      final curAmt = double.tryParse(amountCtrl.text) ?? 0;
+      // Sprint 2026-09 Task 4: max allowed = current remaining + old amount.
+      final remaining = FinanceEngine.scopedRemaining(
+          partyId: payment.partyId,
+          party: payment.party,
+          projectId: payment.projectId);
+      final maxAllowed = remaining + payment.amount;
+      final over = curAmt > maxAllowed + 0.005;
       return AlertDialog(
         title: Text('تعديل الدفعة - ${payment.partyName}',
             style: GoogleFonts.cairo(fontSize: 15, fontWeight: FontWeight.w800)),
         content: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                  color: AppColors.background,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.border)),
+              child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('الحد الأقصى المسموح',
+                        style: GoogleFonts.cairo(
+                            fontSize: 12, fontWeight: FontWeight.w700)),
+                    Flexible(
+                        child: Text(
+                            Money.withCurrency(
+                                maxAllowed, AppCurrency.syp),
+                            style: GoogleFonts.cairo(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.deepNavy))),
+                  ]),
+            ),
+            const SizedBox(height: 12),
             TextField(
                 controller: amountCtrl,
                 onChanged: (_) => setD(() {}),
-                decoration: const InputDecoration(labelText: 'المبلغ *'),
-                keyboardType: TextInputType.number),
-            const SizedBox(height: 12),
-            Row(children: [
-              Text('العملة:', style: GoogleFonts.cairo(fontSize: 12)),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                  label: Text('ل.س', style: GoogleFonts.cairo(fontSize: 12)),
-                  selected: payCur == AppCurrency.syp,
-                  onSelected: (_) => setD(() => payCur = AppCurrency.syp)),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                  label: Text('\$', style: GoogleFonts.cairo(fontSize: 12)),
-                  selected: payCur == AppCurrency.usd,
-                  onSelected: (_) => setD(() => payCur = AppCurrency.usd)),
-            ]),
+                decoration: const InputDecoration(labelText: 'المبلغ (ل.س) *'),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]),
+            if (over && curAmt > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text('المبلغ المدخل أكبر من المتبقي المستحق',
+                    style: GoogleFonts.cairo(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.error)),
+              ),
+            if (errorMsg != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(errorMsg!,
+                    style: GoogleFonts.cairo(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.error)),
+              ),
             const SizedBox(height: 12),
             TextField(
                 controller: rateCtrl,
                 onChanged: (_) => setD(() {}),
                 decoration: const InputDecoration(
-                    labelText: 'سعر صرف الدولار',
+                    labelText: 'سعر صرف الدولار (اختياري للتوثيق)',
                     prefixIcon: Icon(Icons.currency_exchange, size: 18)),
-                keyboardType: TextInputType.number),
-            const SizedBox(height: 12),
-            FxPreview(amount: amt, currency: payCur, dollarRate: rate),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]),
             const SizedBox(height: 12),
             TextField(
                 controller: noteCtrl,
@@ -472,10 +976,20 @@ Future<void> showEditPaymentDialog({
               onPressed: () async {
                 final a = double.tryParse(amountCtrl.text) ?? 0;
                 if (a <= 0) return;
+                // Sprint 2026-09 Task 4: block overpayment on edit.
+                final rem = FinanceEngine.scopedRemaining(
+                    partyId: payment.partyId,
+                    party: payment.party,
+                    projectId: payment.projectId);
+                if (a > rem + payment.amount + 0.005) {
+                  setD(() => errorMsg =
+                      'المبلغ المدخل أكبر من المتبقي المستحق');
+                  return;
+                }
                 await FinanceEngine.updatePayment(
                   payment: payment,
                   amount: a,
-                  currency: payCur,
+                  currency: AppCurrency.syp,
                   reason: noteCtrl.text,
                   date: date,
                   dollarRate: double.tryParse(rateCtrl.text),
@@ -490,4 +1004,201 @@ Future<void> showEditPaymentDialog({
       );
     }),
   );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Detailed financial record modal (Task 7): item lines + totals +
+// remaining + down payment preview for factory invoices.
+// ─────────────────────────────────────────────────────────────
+
+/// Opens a detailed view for ANY ledger row. If [t.relatedId] matches a
+/// factory invoice, shows full invoice breakdown; otherwise shows the
+/// transaction audit detail.
+Future<void> showTransactionDetail(BuildContext context, TransactionEntry t) {
+  InvoiceMatch? match;
+  try {
+    final inv = HiveInit.invoices.get(t.relatedId ?? '__none__');
+    if (inv != null) match = InvoiceMatch(inv.id, inv.invoiceNumber);
+  } catch (_) {}
+  if (match != null) {
+    final inv = HiveInit.invoices.get(match.id);
+    if (inv != null) return showInvoiceDetail(context, inv);
+  }
+  return showDialog(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: Text('تفاصيل الحركة',
+          style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize: 15)),
+      content: SingleChildScrollView(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _detailRow('الشخص', t.partyName),
+          _detailRow('الهاتف', t.partyPhone ?? t.partyId),
+          _detailRow('المصدر', t.source),
+          _detailRow('البيان', t.reason),
+          _detailRow('النوع',
+              t.type == TransactionType.debit ? 'دين (لنا)' : t.type == TransactionType.credit ? 'مستحق (علينا)' : 'دفعة مسددة'),
+          _detailRow('المبلغ', Money.withCurrency(t.amount, AppCurrency.syp)),
+          _detailRow('التاريخ', t.createdAt.toString().substring(0, 16)),
+          _detailRow('العملة', 'ل.س (ثابتة)'),
+          if (t.dollarRate != null)
+            _detailRow('سعر الدولار يوم الدفع', t.dollarRate!.toStringAsFixed(0)),
+          if (t.convertedAmount != null)
+            _detailRow('المعادل بالدولار',
+                Money.withCurrency(t.convertedAmount!, AppCurrency.usd)),
+        ]),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('إغلاق', style: GoogleFonts.cairo())),
+      ],
+    ),
+  );
+}
+
+class InvoiceMatch {
+  final String id;
+  final String number;
+  InvoiceMatch(this.id, this.number);
+}
+
+Widget _detailRow(String label, String value) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(
+          width: 110,
+          child: Text(label,
+              style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textSecondary))),
+      Expanded(
+          child: Text(value,
+              style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700))),
+    ]),
+  );
+}
+
+/// Full invoice statement: every item line + totals + down payment + remaining.
+Future<void> showInvoiceDetail(BuildContext context, dynamic inv) {
+  final items = (inv.effectiveItems as List);
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.85,
+      builder: (_, c) => ListView(
+        controller: c,
+        padding: const EdgeInsets.all(20),
+        children: [
+          Center(
+              child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: AppColors.border,
+                      borderRadius: BorderRadius.circular(4)))),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+                child: Text('فاتورة ${inv.invoiceNumber}',
+                    style: GoogleFonts.cairo(
+                        fontSize: 17, fontWeight: FontWeight.w900))),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(20)),
+              child: Text('ل.س',
+                  style: GoogleFonts.cairo(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.goldDark)),
+            ),
+          ]),
+          Text('${inv.customerName} • ${inv.customerPhone}',
+              style: GoogleFonts.cairo(
+                  fontSize: 12, color: AppColors.textSecondary)),
+          if ((inv.deliveryAddress as String).isNotEmpty)
+            Text(inv.deliveryAddress as String,
+                style: GoogleFonts.cairo(
+                    fontSize: 12, color: AppColors.textSecondary)),
+          const Divider(height: 24),
+          Text('الأصناف (${items.length})',
+              style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          if (items.isEmpty)
+            Text('فاتورة دفعة مالية — بدون أصناف.',
+                style: GoogleFonts.cairo(
+                    fontSize: 12, color: AppColors.textSecondary)),
+          for (final it in items)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border)),
+              child: Row(children: [
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(it.productName as String,
+                          style: GoogleFonts.cairo(
+                              fontWeight: FontWeight.w700, fontSize: 13)),
+                      Text(
+                          '${(it.quantity as double).toStringAsFixed(0)} ${it.unit} × ${Money.withCurrency((it.unitPrice as double), AppCurrency.syp)}',
+                          style: GoogleFonts.cairo(
+                              fontSize: 11,
+                              color: AppColors.textSecondary)),
+                    ])),
+                Text(
+                    Money.withCurrency(
+                        (it.quantity as double) * (it.unitPrice as double),
+                        AppCurrency.syp),
+                    style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
+              ]),
+            ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+                color: AppColors.navyCard,
+                borderRadius: BorderRadius.circular(16)),
+            child: Column(children: [
+              _darkRow('الإجمالي', Money.withCurrency((inv.totalPrice as double), AppCurrency.syp)),
+              const Divider(color: Colors.white24),
+              _darkRow('الدفعة الأولى',
+                  Money.withCurrency((inv.downPayment as double), AppCurrency.syp),
+                  valueColor: AppColors.success),
+              const SizedBox(height: 4),
+              _darkRow('المتبقي (دين)',
+                  Money.withCurrency((inv.remainingBalance as double), AppCurrency.syp),
+                  valueColor: AppColors.error),
+            ]),
+          ),
+          if ((inv.notes as String).isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('ملاحظات: ${inv.notes}',
+                style: GoogleFonts.cairo(
+                    fontSize: 12, color: AppColors.textSecondary)),
+          ],
+          const SizedBox(height: 8),
+          Text('التاريخ: ${(inv.createdAt as DateTime).toString().substring(0, 16)}',
+              style: GoogleFonts.cairo(
+                  fontSize: 11, color: AppColors.textSecondary)),
+        ],
+      ),
+    ),
+  );
+}
+
+Widget _darkRow(String label, String value, {Color valueColor = Colors.white}) {
+  return Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+    Text(label, style: GoogleFonts.cairo(color: Colors.white70, fontSize: 12)),
+    Flexible(
+        child: Text(value,
+            style: GoogleFonts.cairo(
+                color: valueColor, fontWeight: FontWeight.w800, fontSize: 14))),
+  ]);
 }

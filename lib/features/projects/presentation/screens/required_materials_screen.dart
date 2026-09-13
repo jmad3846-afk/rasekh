@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/widgets.dart';
 import '../../../../core/theme/finance_widgets.dart';
+import '../../../../core/utils/currency.dart';
 import '../../../../core/utils/money.dart';
 import '../../logic/site_providers.dart';
 import '../../data/models/project.dart';
+import '../../../personnel/data/models/personnel.dart';
+import '../../../personnel/logic/personnel_providers.dart';
 
 /// Req #11A: required raw materials for a project.
 class RequiredMaterialsScreen extends ConsumerStatefulWidget {
@@ -57,19 +61,42 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
                               GoogleFonts.cairo(fontWeight: FontWeight.w800),
                           overflow: TextOverflow.ellipsis),
                       Text(
-                          '${m.category} • ${m.quantity.toStringAsFixed(1)} ${m.unit} • ${Money.withCurrency(m.unitPrice, widget.project.currency)}/${m.unit}',
+                          '${m.category} • ${m.quantity.toStringAsFixed(1)} ${m.unit} • ${Money.withCurrency(m.unitPrice, AppCurrency.syp)}/${m.unit}',
                           style: GoogleFonts.cairo(
                               fontSize: 11,
                               color: AppColors.textSecondary)),
                       Text(
-                          'الإجمالي ${Money.withCurrency(m.totalValue, widget.project.currency)}',
+                          'الإجمالي ${Money.withCurrency(m.totalValue, AppCurrency.syp)}',
                           style: GoogleFonts.cairo(
                               fontSize: 12, fontWeight: FontWeight.w700)),
+                      if (m.downPayment > 0)
+                        Text(
+                            'الدفعة الأولى ${Money.withCurrency(m.downPayment, AppCurrency.syp)} • المتبقي ${Money.withCurrency(m.totalValue - m.downPayment, AppCurrency.syp)}',
+                            style: GoogleFonts.cairo(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.success)),
+                      if (m.supplierName.isNotEmpty)
+                        Row(children: [
+                          const Icon(Icons.local_shipping_outlined,
+                              size: 12, color: AppColors.goldDark),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                                'المورد: ${m.supplierName}',
+                                style: GoogleFonts.cairo(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.goldDark),
+                                overflow: TextOverflow.ellipsis),
+                          ),
+                        ]),
                     ])),
                 PopupMenuButton<String>(
                   onSelected: (v) async {
                     if (v == 'edit') _upsert(m.id, m.name, m.category,
-                        m.quantity, m.unit, m.unitPrice);
+                        m.quantity, m.unit, m.unitPrice,
+                        supplierId: m.supplierId, downPayment: m.downPayment);
                     if (v == 'delete') {
                       final ok = await confirmDelete(context,
                           title: 'حذف المادة؟',
@@ -103,7 +130,7 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: AppColors.gold, foregroundColor: Colors.white,
-        onPressed: () => _upsert(null, '', '', 0, 'قطعة', 0),
+        onPressed: () => _upsert(null, '', '', 0, 'قطعة', 0, downPayment: 0),
         icon: const Icon(Icons.add),
         label: Text('إضافة مادة', style: GoogleFonts.cairo()),
       ),
@@ -111,7 +138,17 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
   }
 
   void _upsert(String? id, String name, String category, double qty,
-      String unit, double price) {
+      String unit, double price, {String? supplierId, double downPayment = 0}) {
+    final suppliers =
+        ref.read(personnelByRoleProvider(PersonnelRole.supplier));
+    if (suppliers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'لا يوجد موردون — أضف مورداً أولاً من قسم العاملين',
+              style: GoogleFonts.cairo()),
+          backgroundColor: AppColors.error));
+      return;
+    }
     final nameC = TextEditingController(text: name);
     final catC = TextEditingController(text: category);
     final qtyC = TextEditingController(
@@ -119,13 +156,21 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
     final unitC = TextEditingController(text: unit);
     final priceC = TextEditingController(
         text: price == 0 ? '' : price.toString());
+    final downPaymentC = TextEditingController(
+        text: downPayment == 0 ? '' : downPayment.toString());
+    String? selectedSupplierId = supplierId;
+    // Default to first supplier on create.
+    if (selectedSupplierId == null ||
+        !suppliers.any((s) => s.id == selectedSupplierId)) {
+      selectedSupplierId = id == null ? null : selectedSupplierId;
+    }
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
         title: Text(id == null ? 'مادة جديدة' : 'تعديل المادة',
             style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
         content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             TextField(controller: nameC,
                 decoration:
                     const InputDecoration(labelText: 'اسم المادة *')),
@@ -134,12 +179,38 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
                 decoration:
                     const InputDecoration(labelText: 'الفئة')),
             const SizedBox(height: 8),
+            // Mandatory supplier picker (Task 2).
+            Text('المورد * (إلزامي)',
+                style: GoogleFonts.cairo(
+                    fontWeight: FontWeight.w700, fontSize: 12)),
+            const SizedBox(height: 4),
+            DropdownButtonFormField<String>(
+              value: selectedSupplierId,
+              isExpanded: true,
+              hint: Text('اختر المورد *',
+                  style: GoogleFonts.cairo(fontSize: 12)),
+              items: suppliers
+                  .map((s) => DropdownMenuItem(
+                        value: s.id,
+                        child: Text(
+                            '${s.name} • ${s.phone}${s.suppliedMaterials.trim().isEmpty ? '' : ' • ${s.suppliedMaterials}'}',
+                            style: GoogleFonts.cairo(fontSize: 12),
+                            overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: (v) => setD(() => selectedSupplierId = v),
+            ),
+            const SizedBox(height: 8),
             Row(children: [
               Expanded(
                   child: TextField(controller: qtyC,
                       decoration: const InputDecoration(
                           labelText: 'الكمية *'),
-                      keyboardType: TextInputType.number)),
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                            RegExp(r'[0-9.]'))
+                      ])),
               const SizedBox(width: 8),
               Expanded(
                   child: TextField(controller: unitC,
@@ -149,8 +220,30 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
             const SizedBox(height: 8),
             TextField(controller: priceC,
                 decoration: const InputDecoration(
-                    labelText: 'سعر الوحدة'),
-                keyboardType: TextInputType.number),
+                    labelText: 'سعر الوحدة (ل.س)'),
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                ]),
+            const SizedBox(height: 8),
+            // Sprint 2026-09 Task 6: mandatory initial down payment.
+            TextField(controller: downPaymentC,
+                decoration: const InputDecoration(
+                    labelText: 'الدفعة الأولى للمورد (ل.س) *',
+                    hintText: 'مثال: 0 إذا بدون دفعة',
+                    prefixIcon: Icon(Icons.payments_outlined, size: 18)),
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                ]),
+            const SizedBox(height: 4),
+            Text('تُسجَّل الدفعة الأولى تلقائياً في دفتر المورد كدفعة مدفوعة مرتبطة بهذا المشروع.',
+                style: GoogleFonts.cairo(
+                    fontSize: 11, color: AppColors.success, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text('تُرحّل القيمة تلقائياً: دين على صاحب التعهد (لنا) + مستحق للمورد (علينا) — بالليرة السورية.',
+                style: GoogleFonts.cairo(
+                    fontSize: 11, color: AppColors.textSecondary)),
           ]),
         ),
         actions: [
@@ -161,6 +254,38 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
             onPressed: () async {
               final q = double.tryParse(qtyC.text) ?? 0;
               if (nameC.text.trim().isEmpty || q <= 0) return;
+              if (selectedSupplierId == null) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text('اختيار المورد إلزامي',
+                        style: GoogleFonts.cairo()),
+                    backgroundColor: AppColors.error));
+                return;
+              }
+              // Sprint 2026-09 Task 6: mandatory down-payment field.
+              if (downPaymentC.text.trim().isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text('الدفعة الأولى للمورد مطلوبة (أدخل 0 إذا بدون دفعة)',
+                        style: GoogleFonts.cairo()),
+                    backgroundColor: AppColors.error));
+                return;
+              }
+              final dp = double.tryParse(downPaymentC.text) ?? -1;
+              final unitP = double.tryParse(priceC.text) ?? 0;
+              final total = q * unitP;
+              if (dp < 0 || dp > total) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text('الدفعة الأولى يجب أن تكون بين 0 وإجمالي المادة (${total.toStringAsFixed(0)} ل.س)',
+                        style: GoogleFonts.cairo()),
+                    backgroundColor: AppColors.error));
+                return;
+              }
+              PersonnelEntry sup;
+              try {
+                sup = suppliers
+                    .firstWhere((e) => e.id == selectedSupplierId);
+              } catch (_) {
+                return;
+              }
               try {
                 if (id == null) {
                   await ref.read(siteServiceProvider).addMaterial(
@@ -169,8 +294,11 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
                       category: catC.text,
                       quantity: q,
                       unit: unitC.text.isEmpty ? 'قطعة' : unitC.text,
-                      unitPrice:
-                          double.tryParse(priceC.text) ?? 0);
+                      unitPrice: unitP,
+                      supplierId: sup.id,
+                      supplierName: sup.name,
+                      supplierPhone: sup.phone,
+                      downPayment: dp);
                 } else {
                   final box = ref;
                   final mat = box
@@ -185,8 +313,11 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
                             category: catC.text,
                             quantity: q,
                             unit: unitC.text,
-                            unitPrice:
-                                double.tryParse(priceC.text) ?? 0);
+                            unitPrice: unitP,
+                            supplierId: sup.id,
+                            supplierName: sup.name,
+                            supplierPhone: sup.phone,
+                            downPayment: dp);
                   }
                 }
                 if (mounted) Navigator.pop(context);
@@ -201,7 +332,7 @@ class _S extends ConsumerState<RequiredMaterialsScreen> {
             child: Text('حفظ', style: GoogleFonts.cairo()),
           ),
         ],
-      ),
+      )),
     );
   }
 }

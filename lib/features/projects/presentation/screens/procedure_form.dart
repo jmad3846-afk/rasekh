@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -88,9 +89,9 @@ class _S extends ConsumerState<ProcedureFormScreen> {
         TextFormField(controller:masterName, decoration: const InputDecoration(labelText:'اسم المعلم *'), validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:8),
         Row(children:[
-          Expanded(child: TextFormField(controller:masterPhone, decoration: const InputDecoration(labelText:'هاتف المعلم *'), validator:(v)=> v!.isEmpty?'مطلوب':null)),
+          Expanded(child: TextFormField(controller:masterPhone, decoration: const InputDecoration(labelText:'هاتف المعلم *'), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.digitsOnly], validator:(v)=> v!.isEmpty?'مطلوب':null)),
           const SizedBox(width:12),
-          Expanded(child: TextFormField(controller:masterWage, decoration: const InputDecoration(labelText:'الأجرة *'), keyboardType: TextInputType.number, onChanged:(_)=> setState((){}), validator:(v)=> v!.isEmpty?'مطلوب':null)),
+          Expanded(child: TextFormField(controller:masterWage, decoration: const InputDecoration(labelText:'الأجرة *'), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], onChanged:(_)=> setState((){}), validator:(v)=> v!.isEmpty?'مطلوب':null)),
         ]),
         const SizedBox(height:16),
         _section('عمال الورشة'),
@@ -98,9 +99,9 @@ class _S extends ConsumerState<ProcedureFormScreen> {
         Row(children:[
           Expanded(child: TextFormField(controller:wName, decoration: const InputDecoration(labelText:'اسم العامل', isDense:true))),
           const SizedBox(width:8),
-          Expanded(child: TextFormField(controller:wPhone, decoration: const InputDecoration(labelText:'الهاتف', isDense:true))),
+          Expanded(child: TextFormField(controller:wPhone, decoration: const InputDecoration(labelText:'الهاتف', isDense:true), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.digitsOnly])),
           const SizedBox(width:8),
-          SizedBox(width:90, child: TextFormField(controller:wCost, decoration: const InputDecoration(labelText:'الأجرة', isDense:true), keyboardType: TextInputType.number)),
+          SizedBox(width:90, child: TextFormField(controller:wCost, decoration: const InputDecoration(labelText:'الأجرة', isDense:true), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))])),
           IconButton(onPressed: (){
             if(wName.text.isEmpty||wCost.text.isEmpty) return;
             setState(()=> workers.add(WorkshopWorker(name:wName.text, phone:wPhone.text, cost: double.tryParse(wCost.text) ?? 0)));
@@ -111,11 +112,11 @@ class _S extends ConsumerState<ProcedureFormScreen> {
         _section('المورد - المواد'),
         TextFormField(controller:supName, decoration: const InputDecoration(labelText:'اسم المورد *'), validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:8),
-        TextFormField(controller:supPhone, decoration: const InputDecoration(labelText:'هاتف المورد *'), validator:(v)=> v!.isEmpty?'مطلوب':null),
+        TextFormField(controller:supPhone, decoration: const InputDecoration(labelText:'هاتف المورد *'), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.digitsOnly], validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:8),
         TextFormField(controller:supMat, decoration: const InputDecoration(labelText:'المواد الموردة *', hintText:'سمنت 10 طن، رمل...'), validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:8),
-        TextFormField(controller:supCost, decoration: const InputDecoration(labelText:'إجمالي تكلفة المواد *'), keyboardType: TextInputType.number, onChanged:(_)=> setState((){}), validator:(v)=> v!.isEmpty?'مطلوب':null),
+        TextFormField(controller:supCost, decoration: const InputDecoration(labelText:'إجمالي تكلفة المواد *'), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], onChanged:(_)=> setState((){}), validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:12),
         Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.navyCard, borderRadius: BorderRadius.circular(12)), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children:[
           Text('الإجمالي المحسوب', style: GoogleFonts.cairo(color: Colors.white70, fontSize:12)),

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
@@ -22,7 +23,8 @@ class _S extends ConsumerState<ProjectFormScreen> {
   late TextEditingController name, phone, location, totalArea, buildingArea, rooms, desc;
   List<String> photos=[];
   bool _picking=false;
-  AppCurrency currency = AppCurrency.syp;
+  // Single-currency architecture: fixed SYP.
+  final AppCurrency currency = AppCurrency.syp;
 
   @override void initState(){
     super.initState();
@@ -34,7 +36,6 @@ class _S extends ConsumerState<ProjectFormScreen> {
     rooms=TextEditingController(text: widget.project?.roomCount.toString()??'');
     desc=TextEditingController(text: widget.project?.description??'');
     photos=List.from(widget.project?.photoPaths??[]);
-    currency = widget.project?.currency ?? AppCurrency.syp;
   }
 
   Future<void> pickImage() async {
@@ -169,35 +170,32 @@ class _S extends ConsumerState<ProjectFormScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(isEdit?'تعديل التعهد':'تعهد جديد', style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
       body: Form(key:_form, child: ListView(padding: const EdgeInsets.all(16), children:[
-        Text('عملة المشروع * (تُورَّث لكل الإجرائيات والمالية)', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
-        const SizedBox(height:8),
-        Row(children:[
-          Expanded(child: _currencyOption(AppCurrency.syp)),
-          const SizedBox(width:12),
-          Expanded(child: _currencyOption(AppCurrency.usd)),
-        ]),
-        if (isEdit)
-          Padding(
-            padding: const EdgeInsets.only(top:6),
-            child: Text('لا يمكن تغيير العملة بعد الإنشاء لضمان سلامة المالية.',
-              style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary)),
-          ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
+          child: Row(children:[
+            const Icon(Icons.currency_exchange, size: 18, color: AppColors.goldDark),
+            const SizedBox(width: 8),
+            Text('العملة الأساسية: ل.س (ليرة سورية) — ثابتة',
+                style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.goldDark)),
+          ]),
+        ),
         const SizedBox(height:16),
         Text('بيانات العميل والموقع *', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
         const SizedBox(height:8),
         TextFormField(controller:name, decoration: const InputDecoration(labelText:'اسم العميل *', prefixIcon: Icon(Icons.person)), validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:12),
-        TextFormField(controller:phone, decoration: const InputDecoration(labelText:'رقم الهاتف *', prefixIcon: Icon(Icons.phone)), keyboardType: TextInputType.phone, validator:(v)=> v!.isEmpty?'مطلوب':null),
+        TextFormField(controller:phone, decoration: const InputDecoration(labelText:'رقم الهاتف *', prefixIcon: Icon(Icons.phone)), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.digitsOnly], validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:12),
         TextFormField(controller:location, decoration: const InputDecoration(labelText:'موقع الشقة / المشروع *', prefixIcon: Icon(Icons.location_on)), validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:12),
         Row(children:[
-          Expanded(child: TextFormField(controller:totalArea, decoration: const InputDecoration(labelText:'المساحة الكلية م² *'), keyboardType: TextInputType.number, validator:(v)=> v!.isEmpty?'مطلوب':null)),
+          Expanded(child: TextFormField(controller:totalArea, decoration: const InputDecoration(labelText:'المساحة الكلية م² *'), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], validator:(v)=> v!.isEmpty?'مطلوب':null)),
           const SizedBox(width:12),
-          Expanded(child: TextFormField(controller:buildingArea, decoration: const InputDecoration(labelText:'مساحة البناء م² *'), keyboardType: TextInputType.number, validator:(v)=> v!.isEmpty?'مطلوب':null)),
+          Expanded(child: TextFormField(controller:buildingArea, decoration: const InputDecoration(labelText:'مساحة البناء م² *'), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], validator:(v)=> v!.isEmpty?'مطلوب':null)),
         ]),
         const SizedBox(height:12),
-        TextFormField(controller:rooms, decoration: const InputDecoration(labelText:'عدد الغرف *', prefixIcon: Icon(Icons.meeting_room_outlined)), keyboardType: TextInputType.number, validator:(v)=> v!.isEmpty?'مطلوب':null),
+        TextFormField(controller:rooms, decoration: const InputDecoration(labelText:'عدد الغرف *', prefixIcon: Icon(Icons.meeting_room_outlined)), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.digitsOnly], validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:12),
         TextFormField(controller:desc, decoration: const InputDecoration(labelText:'وصف مختصر *', hintText:'نوع التشطيب، طوابق...'), maxLines:3, validator:(v)=> v!.isEmpty?'مطلوب':null),
         const SizedBox(height:16),
@@ -226,37 +224,12 @@ class _S extends ConsumerState<ProjectFormScreen> {
             // Currency locked after creation — keep original.
             await ref.read(projectServiceProvider).update(p);
           } else {
-            final p=Project(clientName:name.text, clientPhone:phone.text, location:location.text, totalArea: double.parse(totalArea.text), buildingArea: double.parse(buildingArea.text), roomCount: int.parse(rooms.text), description: desc.text, photoPaths: photos, currency: currency);
+            final p=Project(clientName:name.text, clientPhone:phone.text, location:location.text, totalArea: double.parse(totalArea.text), buildingArea: double.parse(buildingArea.text), roomCount: int.parse(rooms.text), description: desc.text, photoPaths: photos, currency: AppCurrency.syp);
             await ref.read(projectServiceProvider).add(p);
           }
           if(mounted) Navigator.pop(context);
         }, child: Text(isEdit?'حفظ التعديل':'إنشاء المشروع'))),
       ])),
-    );
-  }
-
-  Widget _currencyOption(AppCurrency c) {
-    final isEdit = widget.project != null;
-    final selected = currency == c;
-    final isUsd = c == AppCurrency.usd;
-    return InkWell(
-      onTap: isEdit ? null : () => setState(()=> currency = c),
-      borderRadius: BorderRadius.circular(12),
-      child: Opacity(
-        opacity: isEdit && !selected ? 0.5 : 1.0,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical:12),
-          decoration: BoxDecoration(
-            color: selected ? (isUsd ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7)) : Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: selected ? (isUsd ? AppColors.success : AppColors.goldDark) : AppColors.border, width: selected ? 2 : 1),
-          ),
-          child: Column(children:[
-            Text(isUsd ? '\$' : 'ل.س', style: GoogleFonts.cairo(fontSize:20, fontWeight: FontWeight.w900, color: isUsd ? AppColors.success : AppColors.goldDark)),
-            Text(isUsd ? 'دولار USD' : 'ليرة SYP', style: GoogleFonts.cairo(fontSize:12, fontWeight: FontWeight.w700)),
-          ]),
-        ),
-      ),
     );
   }
 }

@@ -324,6 +324,20 @@ class DailyLogDetailScreen extends ConsumerWidget {
                       fontWeight: FontWeight.w800,
                       color: AppColors.deepNavy)),
               const Spacer(),
+              // Sprint 2026-09 Task 2: full edit for worker/master procedures.
+              IconButton(
+                tooltip: 'تعديل الإجرائية',
+                icon: const Icon(Icons.edit_outlined,
+                    color: AppColors.deepNavy, size: 20),
+                onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => SiteProcedureFormScreen(
+                            project: project,
+                            log: log,
+                            kind: p.kind,
+                            existing: p))),
+              ),
               IconButton(
                 tooltip: 'حذف الإجرائية',
                 icon: const Icon(Icons.delete_outline,

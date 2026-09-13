@@ -50,10 +50,13 @@ class PersonnelEntry extends HiveObject {
   /// Masters only: profession/trade. Drivers only: vehicle type (reuses field).
   @HiveField(5) String extra;
   @HiveField(6) DateTime createdAt;
+  /// Suppliers only: supplied materials / المواد التي يقدمها (free text/tags).
+  @HiveField(7) String suppliedMaterials;
 
   PersonnelEntry({
     String? id, required this.role, required this.name, required this.phone,
     this.location = '', this.extra = '', DateTime? createdAt,
+    this.suppliedMaterials = '',
   }) : id = id ?? const Uuid().v4(), createdAt = createdAt ?? DateTime.now();
 
   /// Masters: profession. Drivers: vehicle type. Others: ''.
@@ -67,35 +70,48 @@ class PersonnelEntry extends HiveObject {
     return name.toLowerCase().contains(s) ||
         phone.toLowerCase().contains(s) ||
         location.toLowerCase().contains(s) ||
-        extra.toLowerCase().contains(s);
+        extra.toLowerCase().contains(s) ||
+        suppliedMaterials.toLowerCase().contains(s);
   }
 
   Map<String, dynamic> toJson() => {
     'id': id, 'role': role.index, 'name': name, 'phone': phone,
     'location': location, 'extra': extra,
     'createdAt': createdAt.toIso8601String(),
+    'suppliedMaterials': suppliedMaterials,
   };
   factory PersonnelEntry.fromJson(Map<String, dynamic> j) => PersonnelEntry(
     id: j['id'], role: PersonnelRole.values[((j['role'] as num).toInt()).clamp(0, PersonnelRole.values.length - 1)],
     name: j['name'], phone: j['phone'],
     location: j['location'] ?? '', extra: j['extra'] ?? '',
     createdAt: DateTime.parse(j['createdAt']),
+    suppliedMaterials: (j['suppliedMaterials'] as String?) ?? '',
   );
 }
 
 class PersonnelEntryAdapter extends TypeAdapter<PersonnelEntry> {
   @override final typeId = 12;
-  @override PersonnelEntry read(BinaryReader r) => PersonnelEntry(
-    id: r.readString(),
-    role: PersonnelRole.values[r.readInt().clamp(0, PersonnelRole.values.length - 1)],
-    name: r.readString(), phone: r.readString(),
-    location: r.readString(), extra: r.readString(),
-    createdAt: DateTime.fromMillisecondsSinceEpoch(r.readInt()),
-  );
+  @override PersonnelEntry read(BinaryReader r) {
+    final e = PersonnelEntry(
+      id: r.readString(),
+      role: PersonnelRole.values[r.readInt().clamp(0, PersonnelRole.values.length - 1)],
+      name: r.readString(), phone: r.readString(),
+      location: r.readString(), extra: r.readString(),
+      createdAt: DateTime.fromMillisecondsSinceEpoch(r.readInt()),
+    );
+    // Backward-compatible: boxes written before suppliedMaterials lack field 7.
+    try {
+      e.suppliedMaterials = r.readString();
+    } catch (_) {
+      e.suppliedMaterials = '';
+    }
+    return e;
+  }
   @override void write(BinaryWriter w, PersonnelEntry o) {
     w.writeString(o.id); w.writeInt(o.role.index);
     w.writeString(o.name); w.writeString(o.phone);
     w.writeString(o.location); w.writeString(o.extra);
     w.writeInt(o.createdAt.millisecondsSinceEpoch);
+    w.writeString(o.suppliedMaterials);
   }
 }

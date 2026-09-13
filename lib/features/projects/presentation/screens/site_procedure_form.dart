@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -12,15 +13,19 @@ import '../../data/models/site_procedure.dart';
 import '../../../personnel/data/models/personnel.dart';
 
 /// Req #11: worker/master procedure form (inside a daily log only).
+/// Sprint 2026-09 Task 2: supports both create ([existing] == null)
+/// and full edit ([existing] != null) with ledger recalculation.
 class SiteProcedureFormScreen extends ConsumerStatefulWidget {
   final Project project;
   final DailyLog log;
   final SiteProcedureKind kind;
+  final SiteProcedure? existing;
   const SiteProcedureFormScreen(
       {super.key,
       required this.project,
       required this.log,
-      required this.kind});
+      required this.kind,
+      this.existing});
 
   @override
   ConsumerState<SiteProcedureFormScreen> createState() => _S();
@@ -44,6 +49,50 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
   // Consumed materials draft: materialId -> qty.
   final Map<String, double> consumed = {};
   bool saving = false;
+  bool get isEdit => widget.existing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    if (e != null) {
+      contractType = e.contractType;
+      needVehicle = e.needVehicle;
+      workerWageC.text = e.workerWage == 0 ? '' : e.workerWage.toString();
+      dailyRateC.text = e.dailyRate == 0 ? '' : e.dailyRate.toString();
+      agreedC.text = e.agreedTotal == 0 ? '' : e.agreedTotal.toString();
+      agreeUnitC.text = e.agreementPerUnit;
+      descC.text = e.description;
+      notesC.text = e.notes;
+      driverWageC.text = e.driverWage == 0 ? '' : e.driverWage.toString();
+      transportNotesC.text = e.transportNotes;
+      for (final c in e.consumedMaterials) {
+        consumed[c.materialId] = c.quantity;
+      }
+      // Resolve personnel dropdown selections by stored ids.
+      try {
+        if (e.workerId.isNotEmpty) {
+          worker = HiveInit.personnel.values
+              .where((p) => p.role == PersonnelRole.worker)
+              .firstWhere((p) => p.id == e.workerId);
+        }
+      } catch (_) {}
+      try {
+        if (e.masterId.isNotEmpty) {
+          master = HiveInit.personnel.values
+              .where((p) => p.role == PersonnelRole.master)
+              .firstWhere((p) => p.id == e.masterId);
+        }
+      } catch (_) {}
+      try {
+        if (e.driverId.isNotEmpty) {
+          driver = HiveInit.personnel.values
+              .where((p) => p.role == PersonnelRole.driver)
+              .firstWhere((p) => p.id == e.driverId);
+        }
+      } catch (_) {}
+    }
+  }
 
   @override
   void dispose() {
@@ -76,7 +125,9 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
     return Scaffold(
       appBar: AppBar(
           title: Text(
-              isWorker ? 'إجرائية عامل' : 'إجرائية معلم',
+              isEdit
+                  ? (isWorker ? 'تعديل إجرائية عامل' : 'تعديل إجرائية معلم')
+                  : (isWorker ? 'إجرائية عامل' : 'إجرائية معلم'),
               style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
       body: Form(
         key: _form,
@@ -121,6 +172,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                 decoration:
                     const InputDecoration(labelText: 'أجرة العامل *'),
                 keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                 onChanged: (_) => setState(() {}),
                 validator: (v) => v!.isEmpty ? 'مطلوب' : null),
           ] else ...[
@@ -158,6 +210,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                   decoration: const InputDecoration(
                       labelText: 'الأجرة اليومية *'),
                   keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                   onChanged: (_) => setState(() {}),
                   validator: (v) => v!.isEmpty ? 'مطلوب' : null)
             else ...[
@@ -173,6 +226,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                   decoration: const InputDecoration(
                       labelText: 'السعر المتفق الإجمالي *'),
                   keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                   onChanged: (_) => setState(() {}),
                   validator: (v) => v!.isEmpty ? 'مطلوب' : null),
               const SizedBox(height: 8),
@@ -227,6 +281,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                       child: TextFormField(
                         initialValue: consumed[m.id].toString(),
                         keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                         decoration: const InputDecoration(
                             labelText: 'كمية', isDense: true),
                         onChanged: (val) => consumed[m.id] =
@@ -268,6 +323,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                       decoration: const InputDecoration(
                           labelText: 'أجرة السائق *'),
                       keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
                       onChanged: (_) => setState(() {}),
                       validator: (v) =>
                           (needVehicle && (v == null || v.isEmpty))
@@ -328,6 +384,32 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                               quantity: e.value,
                               unit: mat.unit);
                         }).toList();
+                        if (isEdit) {
+                          await ref.read(siteServiceProvider).updateSiteProcedure(
+                                widget.existing!,
+                                workerId: worker?.id ?? '',
+                                workerName: worker?.name ?? '',
+                                workerWage: double.tryParse(workerWageC.text) ?? 0,
+                                masterId: master?.id ?? '',
+                                masterName: master?.name ?? '',
+                                contractType: contractType,
+                                dailyRate: double.tryParse(dailyRateC.text) ?? 0,
+                                description: isWorker
+                                    ? notesC.text
+                                    : (contractType == MasterContractType.lumpSum
+                                        ? descC.text
+                                        : notesC.text),
+                                agreedTotal: double.tryParse(agreedC.text) ?? 0,
+                                agreementPerUnit: agreeUnitC.text,
+                                consumedMaterials: cons,
+                                needVehicle: needVehicle,
+                                driverId: driver?.id ?? '',
+                                driverName: driver?.name ?? '',
+                                driverWage: double.tryParse(driverWageC.text) ?? 0,
+                                transportNotes: transportNotesC.text,
+                                notes: notesC.text,
+                              );
+                        } else {
                         final proc = SiteProcedure(
                           projectId: widget.project.id,
                           dailyLogId: widget.log.id,
@@ -366,6 +448,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                         await ref
                             .read(siteServiceProvider)
                             .addSiteProcedure(proc);
+                        }
                         if (mounted) Navigator.pop(context);
                       } catch (e) {
                         if (mounted) {
@@ -381,7 +464,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                     },
               style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.deepNavy),
-              child: Text(saving ? 'جاري الحفظ...' : 'حفظ الإجرائية',
+              child: Text(saving ? 'جاري الحفظ...' : (isEdit ? 'حفظ التعديل' : 'حفظ الإجرائية'),
                   style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
             ),
           ),

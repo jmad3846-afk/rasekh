@@ -4,12 +4,169 @@ import '../../../core/utils/currency.dart';
 import '../data/models/product.dart';
 import '../data/models/invoice.dart';
 import '../data/models/customer.dart';
+import '../data/models/stock_log.dart';
+import '../data/models/price_tier.dart';
 import '../../finance/logic/finance_engine.dart';
 import '../../finance/data/models/transaction.dart';
 
 final productsProvider = StreamProvider<List<Product>>((ref) async* { final box=HiveInit.products; yield box.values.toList()..sort((a,b)=> b.createdAt.compareTo(a.createdAt)); yield* box.watch().map((_)=> box.values.toList()..sort((a,b)=> b.createdAt.compareTo(a.createdAt))); });
 final productByIdProvider = Provider.family<Product?,String>((ref,id){ ref.watch(productsProvider); try{ return HiveInit.products.values.firstWhere((p)=> p.id==id);}catch(_){ return null; } });
-class ProductNotifier { Future<void> add(Product p) async => await HiveInit.products.put(p.id,p); Future<void> update(Product p) async => await p.save(); Future<void> delete(Product p) async => await p.delete(); }
+class ProductNotifier {
+  /// Duplicate guard (case-insensitive): block creation if name exists.
+  Future<void> add(Product p) async {
+    final exists = HiveInit.products.values.any(
+        (e) => e.name.trim().toLowerCase() == p.name.trim().toLowerCase());
+    if (exists) {
+      throw Exception('هذا المنتج موجود مسبقاً، يرجى التعديل على مخزونه فقط');
+    }
+    p.currency = AppCurrency.syp; // single-currency architecture
+    await HiveInit.products.put(p.id, p);
+    await _seedPriceTier(p);
+  }
+  Future<void> update(Product p, {double? oldUnitPrice}) async {
+    // Prevent renaming into another existing product's name.
+    final clash = HiveInit.products.values.any((e) =>
+        e.id != p.id &&
+        e.name.trim().toLowerCase() == p.name.trim().toLowerCase());
+    if (clash) {
+      throw Exception('هذا المنتج موجود مسبقاً، يرجى التعديل على مخزونه فقط');
+    }
+    p.currency = AppCurrency.syp;
+    await p.save();
+    // Sprint 2026-09: price-change tier tracking.
+    final before = oldUnitPrice ?? p.unitPrice;
+    if ((p.unitPrice - before).abs() > 0.0001) {
+      await _rollPriceTier(p, oldPrice: before);
+    }
+  }
+  Future<void> delete(Product p) async => await p.delete();
+
+  /// Ensures an initial price tier exists right after product creation.
+  Future<void> _seedPriceTier(Product p) async {
+    final has = HiveInit.priceTiers.values.any((t) => t.productId == p.id);
+    if (has) return;
+    await HiveInit.priceTiers.put(
+      '${p.id}-init',
+      ProductPriceTier(
+        id: '${p.id}-init',
+        productId: p.id,
+        productName: p.name,
+        unitPrice: p.unitPrice,
+        unit: p.unit,
+        startedAt: p.createdAt,
+      ),
+    );
+  }
+
+  /// Closes the active tier at [oldPrice] and opens a new one at current price.
+  Future<void> _rollPriceTier(Product p, {required double oldPrice}) async {
+    final now = DateTime.now();
+    final tiers = HiveInit.priceTiers.values
+        .where((t) => t.productId == p.id)
+        .toList()
+      ..sort((a, b) => a.startedAt.compareTo(b.startedAt));
+    if (tiers.isEmpty) {
+      // No history: seed the old price as the first interval, then the new.
+      await HiveInit.priceTiers.put(
+        '${p.id}-${now.millisecondsSinceEpoch}-old',
+        ProductPriceTier(
+          productId: p.id,
+          productName: p.name,
+          unitPrice: oldPrice,
+          unit: p.unit,
+          startedAt: p.createdAt,
+          endedAt: now,
+        ),
+      );
+    } else {
+      final active = tiers.where((t) => t.isActive).toList();
+      for (final t in active) {
+        t.endedAt = now;
+        t.productName = p.name;
+        t.unit = p.unit;
+        await t.save();
+      }
+    }
+    await HiveInit.priceTiers.put(
+      '${p.id}-${now.millisecondsSinceEpoch}',
+      ProductPriceTier(
+        productId: p.id,
+        productName: p.name,
+        unitPrice: p.unitPrice,
+        unit: p.unit,
+        startedAt: now,
+      ),
+    );
+  }
+
+  /// Sprint 2026-09: restock with batch finance.
+  /// [purchaseCost] = TOTAL batch cost → supplier CREDIT (we owe).
+  /// [downPayment] = initial amount paid → supplier PAYMENT entry.
+  /// Batch remaining = purchaseCost - downPayment (minus later partial pays).
+  /// Only [quantityAdded] mutates Product.stockQuantity.
+  Future<StockLog> addStock({
+    required Product product,
+    required double quantityAdded,
+    double purchaseCost = 0,
+    double downPayment = 0,
+    String supplierName = '',
+    String supplierPhone = '',
+    String suppliedMaterials = '',
+    String notes = '',
+  }) async {
+    if (quantityAdded <= 0) throw Exception('الكمية المضافة مطلوبة ويجب أن تكون أكبر من صفر');
+    if (supplierName.trim().isEmpty) throw Exception('اسم المورد/المصدر مطلوب');
+    if (purchaseCost < 0) throw Exception('تكلفة الدفعة غير صالحة');
+    if (downPayment < 0 || downPayment > purchaseCost) {
+      throw Exception('الدفعة الأولى يجب أن تكون بين 0 وإجمالي تكلفة الدفعة');
+    }
+    product.stockQuantity += quantityAdded;
+    await product.save();
+    final log = StockLog(
+      productId: product.id,
+      productName: product.name,
+      quantityAdded: quantityAdded,
+      purchaseCost: purchaseCost,
+      downPayment: downPayment,
+      supplierName: supplierName.trim(),
+      supplierPhone: supplierPhone.trim(),
+      suppliedMaterials: suppliedMaterials.trim(),
+      notes: notes.trim(),
+    );
+    await HiveInit.stockLogs.put(log.id, log);
+    // Post batch finance (credit + down-payment), idempotent per batch id.
+    await FinanceEngine.onStockBatchAdded(log);
+    return log;
+  }
+
+  /// Records a partial payment to an inventory supplier (factory scope).
+  /// Guarded by the inventory-scoped remaining (never global/project dues).
+  Future<void> payInventorySupplier({
+    required String partyId,
+    required String partyName,
+    String? partyPhone,
+    required double amount,
+    String reason = 'دفعة جزئية لمورد مخزون',
+  }) async {
+    if (amount <= 0) throw Exception('المبلغ مطلوب');
+    final remaining = FinanceEngine.inventorySupplierRemaining(partyId);
+    if (amount > remaining + 0.005) {
+      throw Exception('المبلغ المدخل أكبر من المتبقي المستحق');
+    }
+    await FinanceEngine.addPayment(
+      party: TransactionParty.supplier,
+      partyId: partyId,
+      partyName: partyName,
+      partyPhone: partyPhone,
+      amount: amount,
+      source: 'دفعة جزئية مخزون - $partyName',
+      reason: reason,
+      relatedId: null,
+      projectId: null,
+      currency: AppCurrency.syp,
+    );
+  }
+}
 final invoicesProvider = StreamProvider<List<Invoice>>((ref) async* { final box=HiveInit.invoices; yield box.values.toList()..sort((a,b)=> b.createdAt.compareTo(a.createdAt)); yield* box.watch().map((_)=> box.values.toList()..sort((a,b)=> b.createdAt.compareTo(a.createdAt))); });
 final customersProvider = StreamProvider<List<Customer>>((ref) async* {
   final box = HiveInit.customers;
@@ -227,3 +384,110 @@ class InvoiceService {
 
 final invoiceServiceProvider = Provider((ref)=> InvoiceService());
 final productServiceProvider = Provider((ref)=> ProductNotifier());
+
+/// Sprint 2026-09 Task 5: chronological stock audit log stream.
+final stockLogsProvider = StreamProvider<List<StockLog>>((ref) async* {
+  final box = HiveInit.stockLogs;
+  List<StockLog> getList() => box.values.toList()
+    ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  yield getList();
+  yield* box.watch().map((_) => getList());
+});
+
+/// Sprint 2026-09: live price-tier history stream.
+final priceTiersProvider = StreamProvider<List<ProductPriceTier>>((ref) async* {
+  final box = HiveInit.priceTiers;
+  List<ProductPriceTier> getList() => box.values.toList()
+    ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
+  yield getList();
+  yield* box.watch().map((_) => getList());
+});
+
+/// Sprint 2026-09: sales & consumption analytics derived from invoices.
+///
+/// Source of truth = invoice lines (productId + quantity + invoice unitPrice
+/// + invoice date). Each line is attributed to the price tier whose
+/// [startedAt, endedAt) interval contains the invoice date; lines predating
+/// all tiers fall back to matching by unitPrice, then to the earliest tier.
+class ProductAnalytics {
+  /// Total sold quantity + revenue per product (across ALL invoices).
+  static Map<String, ({String name, String unit, double qty, double revenue, int invoices})>
+      salesByProduct() {
+    final out = <String, ({String name, String unit, double qty, double revenue, int invoices})>{};
+    final seenInv = <String, Set<String>>{};
+    for (final inv in HiveInit.invoices.values) {
+      if (inv.isPaymentOnly) continue;
+      for (final l in inv.effectiveItems) {
+        final cur = out[l.productId];
+        final set = seenInv.putIfAbsent(l.productId, () => <String>{});
+        set.add(inv.id);
+        out[l.productId] = (
+          name: l.productName,
+          unit: l.unit,
+          qty: (cur?.qty ?? 0) + l.quantity,
+          revenue: (cur?.revenue ?? 0) + l.lineTotal,
+          invoices: set.length,
+        );
+      }
+    }
+    return out;
+  }
+
+  /// Tiers for one product, oldest → newest. Falls back to a synthetic tier
+  /// from the catalog when no persisted history exists (pre-upgrade data).
+  static List<ProductPriceTier> tiersForProduct(String productId) {
+    final tiers = HiveInit.priceTiers.values
+        .where((t) => t.productId == productId)
+        .toList()
+      ..sort((a, b) => a.startedAt.compareTo(b.startedAt));
+    if (tiers.isNotEmpty) return tiers;
+    try {
+      final p = HiveInit.products.values.firstWhere((e) => e.id == productId);
+      return [
+        ProductPriceTier(
+          productId: p.id,
+          productName: p.name,
+          unitPrice: p.unitPrice,
+          unit: p.unit,
+          startedAt: p.createdAt,
+        ),
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Sold qty + revenue inside ONE tier interval for a product.
+  static ({double qty, double revenue, int lines}) salesInTier(
+      String productId, ProductPriceTier tier) {
+    double qty = 0, revenue = 0;
+    int lines = 0;
+    for (final inv in HiveInit.invoices.values) {
+      if (inv.isPaymentOnly) continue;
+      if (!tier.covers(inv.createdAt)) continue;
+      for (final l in inv.effectiveItems) {
+        if (l.productId != productId) continue;
+        qty += l.quantity;
+        revenue += l.lineTotal;
+        lines++;
+      }
+    }
+    return (qty: qty, revenue: revenue, lines: lines);
+  }
+
+  /// Distinct sold unit-prices inside a tier interval (handles invoice-level
+  /// custom pricing): price → qty sold at exactly that price.
+  static Map<double, double> priceBreakdownInTier(
+      String productId, ProductPriceTier tier) {
+    final map = <double, double>{};
+    for (final inv in HiveInit.invoices.values) {
+      if (inv.isPaymentOnly) continue;
+      if (!tier.covers(inv.createdAt)) continue;
+      for (final l in inv.effectiveItems) {
+        if (l.productId != productId) continue;
+        map[l.unitPrice] = (map[l.unitPrice] ?? 0) + l.quantity;
+      }
+    }
+    return map;
+  }
+}

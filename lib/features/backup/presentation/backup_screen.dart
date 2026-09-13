@@ -76,6 +76,12 @@ class _S extends State<BackupScreen> {
       'المشاريع': HiveInit.projects.length,
       'الاجرائيات': HiveInit.procedures.length,
       'الحركات المالية': HiveInit.transactions.length,
+      'العاملين': HiveInit.personnel.length,
+      'المواد اللازمة': HiveInit.requiredMaterials.length,
+      'اليوميات': HiveInit.dailyLogs.length,
+      'إجرائيات الموقع': HiveInit.siteProcedures.length,
+      'سجلات المخزون': HiveInit.stockLogs.length,
+      'الشرائح السعرية': HiveInit.priceTiers.length,
     };
     return Scaffold(
       appBar: AppBar(title: Text('النسخ الاحتياطي والأمان', style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
@@ -114,7 +120,7 @@ class _S extends State<BackupScreen> {
             Text('مخطط JSON (للتدقيق الخارجي)', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
             const SizedBox(height:8),
             Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(10)), child: Text(
-              '{\n  "metadata": {"version":"1.0","createdAt":"ISO8601"},\n  "products": [...],\n  "customers": [{"id":"uuid PK"}],\n  "invoices": [{"customerId":"FK -> customers.id"}],\n  "projects": [{"clientId":"FK"}],\n  "procedures": [{"projectId":"FK -> projects.id"}],\n  "transactions": [{"partyId":"FK","source":"human readable"}]\n}',
+              '{\n  "metadata": {"version":"6.0","createdAt":"ISO8601"},\n  "products": [...],\n  "customers": [{"id":"uuid PK"}],\n  "invoices": [{"customerId":"FK -> customers.id"}],\n  "projects": [{"clientId":"FK"}],\n  "procedures": [{"projectId":"FK -> projects.id"}],\n  "transactions": [{"partyId":"FK","source":"human readable"}],\n  "stockLogs": [{"productId":"FK","purchaseCost":"batch total","downPayment":"first payment","suppliedMaterials":"supplier catalog"}],\n  "priceTiers": [{"productId":"FK","unitPrice":"tier price","startedAt":"interval"}]\n}',
               style: GoogleFonts.cairo(fontSize:11, color: AppColors.textSecondary),
             )),
           ])),

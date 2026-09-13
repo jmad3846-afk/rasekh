@@ -49,7 +49,7 @@ final projectSiteProceduresProvider =
 });
 
 class SiteService {
-  // ── Required materials ──
+  // ── Required materials (supplier mandatory + dual finance) ──
   Future<RequiredMaterial> addMaterial({
     required String projectId,
     required String name,
@@ -57,28 +57,65 @@ class SiteService {
     required double quantity,
     String unit = 'قطعة',
     double unitPrice = 0,
+    required String supplierId,
+    required String supplierName,
+    required String supplierPhone,
+    double downPayment = 0,
   }) async {
     if (name.trim().isEmpty) throw Exception('اسم المادة مطلوب');
     if (quantity <= 0) throw Exception('الكمية مطلوبة');
+    if (supplierId.trim().isEmpty || supplierName.trim().isEmpty) {
+      throw Exception('اختيار المورد إلزامي');
+    }
+    final total = quantity * unitPrice;
+    if (downPayment < 0 || downPayment > total) {
+      throw Exception('الدفعة الأولى يجب أن تكون بين 0 وإجمالي المادة');
+    }
     final m = RequiredMaterial(
       projectId: projectId, name: name.trim(), category: category.trim(),
       quantity: quantity, unit: unit, unitPrice: unitPrice,
+      supplierId: supplierId.trim(),
+      supplierName: supplierName.trim(),
+      supplierPhone: supplierPhone.trim(),
+      downPayment: downPayment,
     );
     await HiveInit.requiredMaterials.put(m.id, m);
+    final project = HiveInit.projects.get(projectId);
+    if (project != null) {
+      await FinanceEngine.onRequiredMaterialAdded(m, project);
+    }
     return m;
   }
 
   Future<void> updateMaterial(RequiredMaterial m,
-      {String? name, String? category, double? quantity, String? unit, double? unitPrice}) async {
+      {String? name, String? category, double? quantity, String? unit, double? unitPrice,
+       String? supplierId, String? supplierName, String? supplierPhone, double? downPayment}) async {
     if (name != null) m.name = name;
     if (category != null) m.category = category;
     if (quantity != null) m.quantity = quantity;
     if (unit != null) m.unit = unit;
     if (unitPrice != null) m.unitPrice = unitPrice;
+    if (supplierId != null) m.supplierId = supplierId;
+    if (supplierName != null) m.supplierName = supplierName;
+    if (supplierPhone != null) m.supplierPhone = supplierPhone;
+    if (downPayment != null) m.downPayment = downPayment;
+    if (m.supplierId.trim().isEmpty || m.supplierName.trim().isEmpty) {
+      throw Exception('اختيار المورد إلزامي');
+    }
+    if (m.downPayment < 0 || m.downPayment > m.totalValue) {
+      throw Exception('الدفعة الأولى يجب أن تكون بين 0 وإجمالي المادة');
+    }
     await m.save();
+    final project = HiveInit.projects.get(m.projectId);
+    if (project != null) {
+      await FinanceEngine.onRequiredMaterialUpdated(m, project);
+    }
   }
 
-  Future<void> deleteMaterial(RequiredMaterial m) async => await m.delete();
+  Future<void> deleteMaterial(RequiredMaterial m) async {
+    await FinanceEngine.onRequiredMaterialDeleted(m);
+    await m.delete();
+  }
 
   // ── Daily logs ──
   Future<DailyLog> addLog({
@@ -157,6 +194,80 @@ class SiteService {
       await FinanceEngine.clearRelatedTransactions(proc.id);
     }
     await proc.delete();
+  }
+
+  /// Sprint 2026-09 Task 2: full edit for worker/master procedures.
+  /// Restores old consumed stock, validates + deducts new, then re-posts
+  /// finance exactly once via [FinanceEngine.onSiteProcedureUpdated].
+  Future<void> updateSiteProcedure(
+    SiteProcedure existing, {
+    String? workerId,
+    String? workerName,
+    double? workerWage,
+    String? masterId,
+    String? masterName,
+    MasterContractType? contractType,
+    double? dailyRate,
+    String? description,
+    double? agreedTotal,
+    String? agreementPerUnit,
+    List<ConsumedMaterial>? consumedMaterials,
+    bool? needVehicle,
+    String? driverId,
+    String? driverName,
+    double? driverWage,
+    String? transportNotes,
+    String? notes,
+  }) async {
+    final oldTotal = existing.totalCost;
+    // 1. Restore old consumed stock.
+    for (final c in existing.consumedMaterials) {
+      final mat = HiveInit.requiredMaterials.get(c.materialId);
+      if (mat != null) {
+        mat.quantity += c.quantity;
+        await mat.save();
+      }
+    }
+    // 2. Apply new field values.
+    if (workerId != null) existing.workerId = workerId;
+    if (workerName != null) existing.workerName = workerName;
+    if (workerWage != null) existing.workerWage = workerWage;
+    if (masterId != null) existing.masterId = masterId;
+    if (masterName != null) existing.masterName = masterName;
+    if (contractType != null) existing.contractType = contractType;
+    if (dailyRate != null) existing.dailyRate = dailyRate;
+    if (description != null) existing.description = description;
+    if (agreedTotal != null) existing.agreedTotal = agreedTotal;
+    if (agreementPerUnit != null) existing.agreementPerUnit = agreementPerUnit;
+    if (consumedMaterials != null) existing.consumedMaterials = consumedMaterials;
+    if (needVehicle != null) existing.needVehicle = needVehicle;
+    if (driverId != null) existing.driverId = driverId;
+    if (driverName != null) existing.driverName = driverName;
+    if (driverWage != null) existing.driverWage = driverWage;
+    if (transportNotes != null) existing.transportNotes = transportNotes;
+    if (notes != null) existing.notes = notes;
+    existing.recalc();
+    // 3. Validate + deduct new consumed stock.
+    for (final c in existing.consumedMaterials) {
+      final mat = HiveInit.requiredMaterials.get(c.materialId);
+      if (mat == null) throw Exception('مادة غير موجودة: ${c.materialName}');
+      if (mat.quantity < c.quantity) {
+        throw Exception('الكمية غير كافية من ${mat.name}: متاح ${mat.quantity}');
+      }
+    }
+    for (final c in existing.consumedMaterials) {
+      final mat = HiveInit.requiredMaterials.get(c.materialId)!;
+      mat.quantity -= c.quantity;
+      await mat.save();
+    }
+    // 4. Finance: revert old totals + clear old rows + re-post once.
+    final project = HiveInit.projects.get(existing.projectId);
+    if (project == null) throw Exception('المشروع غير موجود');
+    await FinanceEngine.onSiteProcedureUpdated(
+      updated: existing,
+      oldTotal: oldTotal,
+      project: project,
+    );
   }
 }
 

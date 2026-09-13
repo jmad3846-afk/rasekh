@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
@@ -90,7 +91,7 @@ class _S extends ConsumerState<PersonnelScreen> with SingleTickerProviderStateMi
       case PersonnelRole.master:
         return 'بحث بالاسم أو المهنة أو الهاتف...';
       case PersonnelRole.supplier:
-        return 'بحث بالاسم أو الهاتف...';
+        return 'بحث بالاسم أو الهاتف أو المواد...';
       case PersonnelRole.driver:
         return 'بحث بالاسم أو الهاتف أو نوع السيارة...';
     }
@@ -189,7 +190,9 @@ class _S extends ConsumerState<PersonnelScreen> with SingleTickerProviderStateMi
       case PersonnelRole.master:
         return '${p.phone} • ${p.extra} • ${p.location}';
       case PersonnelRole.supplier:
-        return '${p.phone} • ${p.location}';
+        final base = '${p.phone} • ${p.location}';
+        if (p.suppliedMaterials.trim().isEmpty) return base;
+        return '$base • ${p.suppliedMaterials}';
       case PersonnelRole.driver:
         return '${p.phone} • ${p.extra}';
     }
@@ -200,6 +203,7 @@ class _S extends ConsumerState<PersonnelScreen> with SingleTickerProviderStateMi
     final phoneC = TextEditingController(text: existing?.phone ?? '');
     final locC = TextEditingController(text: existing?.location ?? '');
     final extraC = TextEditingController(text: existing?.extra ?? '');
+    final suppliedC = TextEditingController(text: existing?.suppliedMaterials ?? '');
     final isEdit = existing != null;
     showDialog(
       context: context,
@@ -216,7 +220,16 @@ class _S extends ConsumerState<PersonnelScreen> with SingleTickerProviderStateMi
             const SizedBox(height: 8),
             TextField(controller: phoneC,
                 decoration: const InputDecoration(labelText: 'الهاتف *'),
-                keyboardType: TextInputType.phone),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly]),
+            if (role == PersonnelRole.supplier) ...[
+              const SizedBox(height: 8),
+              TextField(controller: suppliedC,
+                  decoration: const InputDecoration(
+                      labelText: 'المواد التي يقدمها *',
+                      hintText: 'مثال: سمنت، حديد، رمل'),
+                  maxLines: 2),
+            ],
             if (role != PersonnelRole.driver) ...[
               const SizedBox(height: 8),
               TextField(controller: locC,
@@ -248,14 +261,16 @@ class _S extends ConsumerState<PersonnelScreen> with SingleTickerProviderStateMi
                       name: nameC.text,
                       phone: phoneC.text,
                       location: locC.text,
-                      extra: extraC.text);
+                      extra: extraC.text,
+                      suppliedMaterials: suppliedC.text);
                 } else {
                   await ref.read(personnelServiceProvider).add(
                       role: role,
                       name: nameC.text,
                       phone: phoneC.text,
                       location: locC.text,
-                      extra: extraC.text);
+                      extra: extraC.text,
+                      suppliedMaterials: suppliedC.text);
                 }
                 if (mounted) Navigator.pop(context);
               } catch (e) {
@@ -275,6 +290,7 @@ class _S extends ConsumerState<PersonnelScreen> with SingleTickerProviderStateMi
   }
 
   /// Financial jump: find project ledgers containing this person;
+  /// Sprint 2026-09 Task 7: hide settled projects (remaining == 0).
   /// if multiple -> selector dialog, else open directly.
   void _openLedger(BuildContext context, PersonnelEntry p) {
     final matches = <String>{};
@@ -300,7 +316,48 @@ class _S extends ConsumerState<PersonnelScreen> with SingleTickerProviderStateMi
               style: GoogleFonts.cairo())));
       return;
     }
-    final projects = matches
+    // Task 7 filter: keep only projects with pending dues for this person.
+    final party = switch (p.role) {
+      PersonnelRole.worker => TransactionParty.worker,
+      PersonnelRole.master => TransactionParty.master,
+      PersonnelRole.supplier => TransactionParty.supplier,
+      PersonnelRole.driver => TransactionParty.driver,
+    };
+    final active = <String>[];
+    for (final pid in matches) {
+      final balances = FinanceEngine.personnelBalancesForProject(pid);
+      double remaining = 0;
+      var found = false;
+      for (final e in balances.entries) {
+        if (!e.key.startsWith('${party.index}|')) continue;
+        if (e.value.phone.trim() == p.phone.trim() ||
+            e.value.name.trim().toLowerCase() ==
+                p.name.trim().toLowerCase()) {
+          remaining = e.value.remaining;
+          found = true;
+          break;
+        }
+      }
+      // If no balance row found (e.g. procedure id link only), check raw
+      // scoped remaining by trying phone + name as partyId candidates.
+      if (!found) {
+        final byPhone = FinanceEngine.scopedRemaining(
+            partyId: p.phone, party: party, projectId: pid);
+        final byId = FinanceEngine.scopedRemaining(
+            partyId: p.id, party: party, projectId: pid);
+        remaining = byPhone > 0 ? byPhone : byId;
+        if (remaining > 0.005) found = true;
+      }
+      if (found && remaining > 0.005) active.add(pid);
+    }
+    if (active.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'لا توجد مشاريع مستحقة لـ ${p.name} — كل الحسابات خالصة (المتبقي = 0)',
+              style: GoogleFonts.cairo())));
+      return;
+    }
+    final projects = active
         .map((id) => HiveInit.projects.get(id))
         .whereType<dynamic>()
         .toList();

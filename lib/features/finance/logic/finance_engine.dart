@@ -4,9 +4,11 @@ import '../../../core/database/hive_init.dart';
 import '../../../core/utils/currency.dart';
 import '../data/models/transaction.dart';
 import '../../factory/data/models/invoice.dart';
+import '../../factory/data/models/stock_log.dart';
 import '../../projects/data/models/procedure.dart';
 import '../../projects/data/models/project.dart';
 import '../../projects/data/models/site_procedure.dart';
+import '../../projects/data/models/site_materials.dart';
 
 /// Idempotent financial ledger engine with multi-currency support.
 ///
@@ -334,6 +336,132 @@ class FinanceEngine {
     await clearRelatedTransactions(p.id);
   }
 
+  /// Sprint 2026-09 Task 2: edit flow for daily-log procedures.
+  /// Reverts old project totals + deletes ALL old ledger rows, then re-posts
+  /// exactly once with new values. No duplicates, no orphans.
+  static Future<void> onSiteProcedureUpdated({
+    required SiteProcedure updated,
+    required double oldTotal,
+    required Project project,
+  }) async {
+    updated.currency = project.currency;
+    updated.recalc();
+    project.totalCost -= oldTotal;
+    project.completedCost -= oldTotal;
+    await clearRelatedTransactions(updated.id);
+    project.totalCost += updated.totalCost;
+    project.completedCost += updated.totalCost;
+    await project.save();
+    await updated.save();
+    // Re-post exactly once (same posting logic as add).
+    final base =
+        'يومية ${updated.description.isEmpty ? updated.personName : updated.description} - ${project.location}';
+    final cur = updated.currency;
+    await _add(TransactionEntry(
+      partyId: project.clientId, partyName: project.clientName,
+      partyPhone: project.clientPhone, party: TransactionParty.client,
+      type: TransactionType.debit, amount: updated.totalCost,
+      source: base, reason: 'تكلفة إجرائية موقع',
+      relatedId: updated.id, projectId: project.id, currency: cur,
+    ));
+    if (updated.kind == SiteProcedureKind.worker) {
+      await _add(TransactionEntry(
+        partyId: updated.workerId.isEmpty ? 'worker-${updated.id}' : updated.workerId,
+        partyName: updated.workerName, party: TransactionParty.worker,
+        type: TransactionType.credit, amount: updated.workerWage,
+        source: base, reason: 'أجرة عامل ${updated.workerName}',
+        relatedId: updated.id, projectId: project.id, currency: cur,
+      ));
+    } else {
+      await _add(TransactionEntry(
+        partyId: updated.masterId.isEmpty ? 'master-${updated.id}' : updated.masterId,
+        partyName: updated.masterName, party: TransactionParty.master,
+        type: TransactionType.credit, amount: updated.baseWage,
+        source: base, reason: updated.contractType == MasterContractType.daily
+            ? 'يومية معلم ${updated.masterName}' : 'مقطوع معلم ${updated.masterName}: ${updated.description}',
+        relatedId: updated.id, projectId: project.id, currency: cur,
+      ));
+    }
+    if (updated.needVehicle && updated.driverWage > 0) {
+      await _add(TransactionEntry(
+        partyId: updated.driverId.isEmpty ? 'driver-${updated.id}' : updated.driverId,
+        partyName: updated.driverName.isEmpty ? 'سائق' : updated.driverName,
+        party: TransactionParty.driver,
+        type: TransactionType.credit, amount: updated.driverWage,
+        source: base, reason: 'أجرة نقل${updated.transportNotes.isEmpty ? '' : ': ${updated.transportNotes}'}',
+        relatedId: updated.id, projectId: project.id, currency: cur,
+      ));
+    }
+  }
+
+  // ── Required materials dual finance (Task 3) ──────────────
+  /// Rule 1 (Receivable/لنا): material total -> project owner debt (client debit).
+  /// Rule 2 (Payable/علينا): same total -> supplier credit (we owe supplier).
+  /// Rule 3 (Sprint 2026-09 Task 6): initial down payment -> supplier PAYMENT
+  ///   entry linked to the same material/project (reduces supplier remaining).
+  /// Single SYP currency. Idempotent via [clearRelatedTransactions].
+  static Future<void> onRequiredMaterialAdded(
+      RequiredMaterial m, Project project) async {
+    await clearRelatedTransactions(m.id);
+    final total = m.totalValue;
+    if (total <= 0) return;
+    const cur = AppCurrency.syp;
+    final base = 'مواد لازمة ${m.name} - مشروع ${project.location}';
+    await _add(TransactionEntry(
+      partyId: project.clientId,
+      partyName: project.clientName,
+      partyPhone: project.clientPhone,
+      party: TransactionParty.client,
+      type: TransactionType.debit,
+      amount: total,
+      source: base,
+      reason: 'تكلفة مواد لازمة (${m.quantity} ${m.unit})',
+      relatedId: m.id,
+      projectId: project.id,
+      currency: cur,
+    ));
+    await _add(TransactionEntry(
+      partyId: m.supplierPhone.isEmpty ? 'supplier-${m.supplierId}' : m.supplierPhone,
+      partyName: m.supplierName.isEmpty ? 'مورد' : m.supplierName,
+      partyPhone: m.supplierPhone.isEmpty ? null : m.supplierPhone,
+      party: TransactionParty.supplier,
+      type: TransactionType.credit,
+      amount: total,
+      source: base,
+      reason: 'مستحق للمورد ${m.supplierName} عن ${m.name}',
+      relatedId: m.id,
+      projectId: project.id,
+      currency: cur,
+    ));
+    // Down payment: clamp to [0, total] to respect overpayment guard.
+    final dp = m.downPayment.clamp(0, total).toDouble();
+    if (dp > 0.005) {
+      await _add(TransactionEntry(
+        partyId: m.supplierPhone.isEmpty ? 'supplier-${m.supplierId}' : m.supplierPhone,
+        partyName: m.supplierName.isEmpty ? 'مورد' : m.supplierName,
+        partyPhone: m.supplierPhone.isEmpty ? null : m.supplierPhone,
+        party: TransactionParty.supplier,
+        type: TransactionType.payment,
+        amount: dp,
+        source: 'دفعة أولى للمورد ${m.supplierName} - ${m.name}',
+        reason: 'دفعة أولى عن مواد لازمة (${m.name})',
+        relatedId: m.id,
+        projectId: project.id,
+        currency: cur,
+      ));
+    }
+  }
+
+  static Future<void> onRequiredMaterialUpdated(
+      RequiredMaterial m, Project project) async {
+    // Re-post exactly once (clear + add).
+    await onRequiredMaterialAdded(m, project);
+  }
+
+  static Future<void> onRequiredMaterialDeleted(RequiredMaterial m) async {
+    await clearRelatedTransactions(m.id);
+  }
+
   // ── Balances (currency-aware) ─────────────────────────────
   static double balanceFor(String partyId, TransactionParty party,
       {AppCurrency? currency}) {
@@ -470,6 +598,198 @@ class FinanceEngine {
       );
     });
     return out;
+  }
+
+  /// Sprint 2026-09 Task 4: remaining dues for overpayment guard.
+  /// If [projectId] is provided, scope to that project only; otherwise global.
+  /// Clients: debit - payment. Personnel: credit - payment.
+  static double scopedRemaining({
+    required String partyId,
+    required TransactionParty party,
+    String? projectId,
+    AppCurrency currency = AppCurrency.syp,
+  }) {
+    double debt = 0, paid = 0;
+    for (final t in _box.values) {
+      if (t.partyId != partyId || t.party != party) continue;
+      if (t.currency != currency) continue;
+      if (projectId != null && projectId.isNotEmpty && t.projectId != projectId) {
+        continue;
+      }
+      if (t.type == TransactionType.payment) {
+        paid += t.amount;
+      } else if (t.type == TransactionType.debit ||
+          (party != TransactionParty.client && t.type == TransactionType.credit)) {
+        debt += t.amount;
+      }
+    }
+    return debt - paid;
+  }
+
+  /// Sprint 2026-09 Task 3: factory-only client ledger (no project link).
+  static List<TransactionEntry> factoryClientLedger() {
+    final list = _box.values
+        .where((e) =>
+            e.party == TransactionParty.client &&
+            (e.projectId == null || e.projectId!.isEmpty))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  static double factoryClientDebt() {
+    double sum = 0;
+    for (final t in factoryClientLedger()) {
+      if (t.type == TransactionType.debit) sum += t.amount;
+      if (t.type == TransactionType.credit ||
+          t.type == TransactionType.payment) sum -= t.amount;
+    }
+    return sum;
+  }
+
+  // ── Inventory stock batches (Sprint 2026-09: موردو مخزون المعمل) ──
+  /// Posts a restock batch: supplier CREDIT = batch total (we owe),
+  /// plus supplier PAYMENT = down payment (already paid).
+  /// Factory scope (projectId = null) so it stays isolated from
+  /// contracting supplier ledgers. Idempotent via [clearRelatedTransactions].
+  static Future<void> onStockBatchAdded(StockLog log) async {
+    await clearRelatedTransactions(log.id);
+    final total = log.purchaseCost;
+    if (total <= 0) return;
+    const cur = AppCurrency.syp;
+    final partyId = log.supplierPhone.trim().isEmpty
+        ? 'stock-${log.supplierName.trim()}'
+        : log.supplierPhone.trim();
+    final name =
+        log.supplierName.trim().isEmpty ? 'مورد مخزون' : log.supplierName.trim();
+    final base = 'مخزون معمل ${log.productName} (+${log.quantityAdded.toStringAsFixed(0)})';
+    await _add(TransactionEntry(
+      partyId: partyId,
+      partyName: name,
+      partyPhone: log.supplierPhone.trim().isEmpty ? null : log.supplierPhone.trim(),
+      party: TransactionParty.supplier,
+      type: TransactionType.credit,
+      amount: total,
+      source: base,
+      reason: 'تكلفة دفعة مخزون (${log.productName})',
+      relatedId: log.id,
+      projectId: null,
+      currency: cur,
+    ));
+    final dp = log.downPayment.clamp(0, total).toDouble();
+    if (dp > 0.005) {
+      await _add(TransactionEntry(
+        partyId: partyId,
+        partyName: name,
+        partyPhone: log.supplierPhone.trim().isEmpty ? null : log.supplierPhone.trim(),
+        party: TransactionParty.supplier,
+        type: TransactionType.payment,
+        amount: dp,
+        source: 'دفعة أولى مخزون - $name (${log.productName})',
+        reason: 'دفعة أولى عن دفعة مخزون (${log.productName})',
+        relatedId: log.id,
+        projectId: null,
+        currency: cur,
+      ));
+    }
+  }
+
+  /// Factory-scope supplier ledger: inventory suppliers ONLY
+  /// (project-linked contracting suppliers are excluded).
+  static List<TransactionEntry> inventorySupplierLedger() {
+    final list = _box.values
+        .where((e) =>
+            e.party == TransactionParty.supplier &&
+            (e.projectId == null || e.projectId!.isEmpty))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  /// Supplier identity profiles for the restock auto-complete.
+  /// Key = ledger partyId (phone, or 'stock-{name}' when phoneless).
+  /// [suppliedMaterials] = latest non-empty value recorded on any batch.
+  /// Suppliers known only from payments (no batch yet) still appear
+  /// with empty materials so they remain selectable.
+  static Map<String, ({String name, String phone, String suppliedMaterials})>
+      inventorySupplierProfiles() {
+    final out = <String, ({String name, String phone, String suppliedMaterials})>{};
+    // Base identities from the ledger (covers payment-only suppliers too).
+    for (final t in inventorySupplierLedger()) {
+      out.putIfAbsent(
+        t.partyId,
+        () => (
+          name: t.partyName,
+          phone: t.partyPhone ?? t.partyId,
+          suppliedMaterials: '',
+        ),
+      );
+    }
+    // Enrich with latest batch details from stock logs.
+    final logs = HiveInit.stockLogs.values.toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    for (final l in logs) {
+      final key = l.supplierPhone.trim().isEmpty
+          ? 'stock-${l.supplierName.trim()}'
+          : l.supplierPhone.trim();
+      if (key == 'stock-' || key.isEmpty) continue;
+      final prev = out[key];
+      final mats = l.suppliedMaterials.trim().isEmpty
+          ? (prev?.suppliedMaterials ?? '')
+          : l.suppliedMaterials.trim();
+      out[key] = (
+        name: l.supplierName.trim().isEmpty
+            ? (prev?.name ?? 'مورد مخزون')
+            : l.supplierName.trim(),
+        phone: l.supplierPhone.trim().isEmpty
+            ? (prev?.phone ?? key)
+            : l.supplierPhone.trim(),
+        suppliedMaterials: mats,
+      );
+    }
+    return out;
+  }
+
+  /// Per-supplier totals inside the inventory ledger.
+  static Map<String, ({String name, String phone, double totalCost, double paid, double remaining, int moves})>
+      inventorySupplierBalances() {
+    final Map<String, List<TransactionEntry>> grouped = {};
+    for (final t in inventorySupplierLedger()) {
+      grouped.putIfAbsent(t.partyId, () => []).add(t);
+    }
+    final out = <String, ({String name, String phone, double totalCost, double paid, double remaining, int moves})>{};
+    grouped.forEach((partyId, list) {
+      double cost = 0, paid = 0;
+      for (final t in list) {
+        if (t.type == TransactionType.credit) cost += t.amount;
+        if (t.type == TransactionType.payment) paid += t.amount;
+      }
+      final first = list.first;
+      out[partyId] = (
+        name: first.partyName,
+        phone: first.partyPhone ?? partyId,
+        totalCost: cost,
+        paid: paid,
+        remaining: cost - paid,
+        moves: list.length,
+      );
+    });
+    return out;
+  }
+
+  /// Inventory-scoped remaining for ONE supplier (overpayment guard).
+  static double inventorySupplierRemaining(String partyId) {
+    double cost = 0, paid = 0;
+    for (final t in _box.values) {
+      if (t.party != TransactionParty.supplier || t.partyId != partyId) {
+        continue;
+      }
+      if (t.projectId != null && t.projectId!.isNotEmpty) continue;
+      if (t.currency != AppCurrency.syp) continue;
+      if (t.type == TransactionType.credit) cost += t.amount;
+      if (t.type == TransactionType.payment) paid += t.amount;
+    }
+    return cost - paid;
   }
 
   static double totalSales({AppCurrency? currency}) {

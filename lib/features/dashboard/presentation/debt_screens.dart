@@ -20,7 +20,8 @@ class DebtBreakdownScreen extends ConsumerStatefulWidget {
 }
 
 class _S extends ConsumerState<DebtBreakdownScreen> {
-  AppCurrency filter = AppCurrency.syp;
+  // Sprint 2026-09 Task 1: SYP-only analytics — USD filter removed entirely.
+  static const filter = AppCurrency.syp;
   String query = '';
   final ctrl = TextEditingController();
 
@@ -62,20 +63,22 @@ class _S extends ConsumerState<DebtBreakdownScreen> {
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(children: [
-            // Currency toggle filter.
-            Row(children: [
-              Text('العملة:', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                  label: Text('ل.س SYP', style: GoogleFonts.cairo(fontSize: 12)),
-                  selected: filter == AppCurrency.syp,
-                  onSelected: (_) => setState(() => filter = AppCurrency.syp)),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                  label: Text('\$ USD', style: GoogleFonts.cairo(fontSize: 12)),
-                  selected: filter == AppCurrency.usd,
-                  onSelected: (_) => setState(() => filter = AppCurrency.usd)),
-            ]),
+            // Sprint 2026-09 Task 1: fixed SYP banner (no currency toggle).
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.border)),
+              child: Row(children: [
+                const Icon(Icons.currency_exchange,
+                    size: 18, color: AppColors.goldDark),
+                const SizedBox(width: 8),
+                Text('العملة: ل.س (ليرة سورية) — ثابتة',
+                    style: GoogleFonts.cairo(
+                        fontSize: 12, fontWeight: FontWeight.w700)),
+              ]),
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: ctrl,
@@ -97,9 +100,9 @@ class _S extends ConsumerState<DebtBreakdownScreen> {
               child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('إجمالي التراكم (${filter.code})',
+                    Text('إجمالي التراكم (ل.س)',
                         style: GoogleFonts.cairo(color: Colors.white70, fontSize: 12)),
-                    Text(Money.withCurrency(total, filter),
+                    Text(Money.withCurrency(total, AppCurrency.syp),
                         style: GoogleFonts.cairo(
                             color: Colors.white,
                             fontWeight: FontWeight.w900,
@@ -112,7 +115,7 @@ class _S extends ConsumerState<DebtBreakdownScreen> {
           child: entries.isEmpty
               ? Center(child: Text('لا توجد ديون مطابقة',
                   style: GoogleFonts.cairo(color: AppColors.textSecondary)))
-              : ListView.separated(
+                : ListView.separated(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   itemCount: entries.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
@@ -125,6 +128,17 @@ class _S extends ConsumerState<DebtBreakdownScreen> {
                         partyId, first.party, currency: filter);
                     final s = FinanceEngine.personSummary(list);
                     return GlassCard(
+                        onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => PersonFinanceDetailScreen(
+                                  partyId: partyId,
+                                  party: first.party,
+                                  partyName: first.partyName,
+                                  currency: filter,
+                                ),
+                              ),
+                            ),
                         child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -135,6 +149,9 @@ class _S extends ConsumerState<DebtBreakdownScreen> {
                                         fontWeight: FontWeight.w800),
                                     overflow: TextOverflow.ellipsis)),
                             CurrencyBadge(filter),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.arrow_forward_ios,
+                                size: 14, color: AppColors.textSecondary),
                           ]),
                           Text(first.partyPhone ?? partyId,
                               style: GoogleFonts.cairo(
@@ -144,6 +161,10 @@ class _S extends ConsumerState<DebtBreakdownScreen> {
                           Text(
                               'المتراكم: ${Money.withCurrency(bal, filter)} • مدفوع: ${Money.withCurrency(s.paid, filter)} • ${list.length} حركة',
                               style: GoogleFonts.cairo(fontSize: 11)),
+                          Text('اضغط لعرض التفاصيل الكاملة وتسجيل دفعة',
+                              style: GoogleFonts.cairo(
+                                  fontSize: 10,
+                                  color: AppColors.goldDark)),
                           const SizedBox(height: 8),
                           SizedBox(
                             width: double.infinity,
@@ -212,10 +233,11 @@ class LowStockScreen extends ConsumerWidget {
                                       fontWeight: FontWeight.w800),
                                   overflow: TextOverflow.ellipsis)),
                           const SizedBox(width: 6),
-                          CurrencyBadge(p.currency),
+                          // Sprint 2026-09 Task 1: SYP-only.
+                          const CurrencyBadge(AppCurrency.syp),
                         ]),
                         Text(
-                            '${p.category} • ${Money.withCurrency(p.unitPrice, p.currency)}/${p.unit}',
+                            '${p.category} • ${Money.withCurrency(p.unitPrice, AppCurrency.syp)}/${p.unit}',
                             style: GoogleFonts.cairo(
                                 fontSize: 11,
                                 color: AppColors.textSecondary)),
@@ -229,6 +251,168 @@ class LowStockScreen extends ConsumerWidget {
                 ]));
               },
             ),
+    );
+  }
+}
+
+/// Task 5: full interactive person ledger — opened from لنا/علينا KPIs.
+/// Shows balances + complete timeline + record payment directly.
+/// Live-updates central ledger via [transactionsProvider] watch.
+/// Sprint 2026-09 Task 1: SYP-only — [currency] kept for compat but ignored.
+class PersonFinanceDetailScreen extends ConsumerWidget {
+  final String partyId;
+  final TransactionParty party;
+  final String partyName;
+  final AppCurrency currency;
+  const PersonFinanceDetailScreen({
+    super.key,
+    required this.partyId,
+    required this.party,
+    required this.partyName,
+    this.currency = AppCurrency.syp,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(transactionsProvider);
+    const cur = AppCurrency.syp;
+    final list = FinanceEngine.ledgerFor(partyId, party, currency: cur);
+    final s = FinanceEngine.personSummary(list);
+    final bal = FinanceEngine.balanceFor(partyId, party, currency: cur);
+    final first = list.isNotEmpty ? list.first : null;
+    return Scaffold(
+      appBar: AppBar(
+          title: Text(partyName,
+              style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Row(children: [
+          Expanded(
+              child: _card('المتبقي', Money.withCurrency(bal, AppCurrency.syp),
+                  AppColors.error, AppColors.errorBg)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: _card('المدفوع', Money.withCurrency(s.paid, AppCurrency.syp),
+                  AppColors.success, AppColors.successBg)),
+        ]),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () => showPaymentDialog(
+              context: context,
+              party: party,
+              partyId: partyId,
+              partyName: partyName,
+              partyPhone: first?.partyPhone,
+              projectId: first?.projectId,
+              initialCurrency: AppCurrency.syp,
+            ),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.deepNavy,
+                foregroundColor: Colors.white),
+            icon: const Icon(Icons.payments_outlined),
+            label: Text('دفع دفعة / تسوية',
+                style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text('السجل الكامل (${list.length} حركة) — اضغط أي سطر للتفاصيل',
+            style: GoogleFonts.cairo(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary)),
+        const SizedBox(height: 8),
+        if (list.isEmpty)
+          GlassCard(
+              child: Center(
+                  child: Text('لا توجد حركات بهذه العملة',
+                      style: GoogleFonts.cairo(
+                          color: AppColors.textSecondary)))),
+        for (final t in list)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: GlassCard(
+              onTap: () => showTransactionDetail(context, t),
+              padding: const EdgeInsets.all(12),
+              child: Row(children: [
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(t.source,
+                          style: GoogleFonts.cairo(
+                              fontSize: 12, fontWeight: FontWeight.w700),
+                          overflow: TextOverflow.ellipsis),
+                      Text(
+                          '${t.reason} • ${t.createdAt.toString().substring(0, 10)}',
+                          style: GoogleFonts.cairo(
+                              fontSize: 11,
+                              color: AppColors.textSecondary)),
+                      if (t.dollarRate != null)
+                        Text('سعر ${t.dollarRate!.toStringAsFixed(0)}',
+                            style: GoogleFonts.cairo(
+                                fontSize: 10, color: AppColors.goldDark)),
+                    ])),
+                Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(Money.withCurrency(t.amount, AppCurrency.syp),
+                          style: GoogleFonts.cairo(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                              color: t.type == TransactionType.payment
+                                  ? AppColors.success
+                                  : AppColors.error)),
+                      if (t.isPayment)
+                        Row(mainAxisSize: MainAxisSize.min, children: [
+                          IconButton(
+                            tooltip: 'تعديل',
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.edit_outlined,
+                                size: 16, color: AppColors.deepNavy),
+                            onPressed: () =>
+                                showEditPaymentDialog(
+                                    context: context, payment: t),
+                          ),
+                          IconButton(
+                            tooltip: 'حذف',
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.delete_outline,
+                                size: 16, color: AppColors.error),
+                            onPressed: () async {
+                              final ok = await confirmDelete(context,
+                                  title: 'حذف الدفعة؟',
+                                  message:
+                                      'هل أنت متأكد من حذف دفعة ${Money.withCurrency(t.amount, AppCurrency.syp)}؟');
+                              if (ok) {
+                                await FinanceEngine.deletePayment(t);
+                              }
+                            },
+                          ),
+                        ]),
+                    ]),
+              ]),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Widget _card(String label, String value, Color fg, Color bg) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration:
+          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: GoogleFonts.cairo(
+                fontSize: 12, color: fg, fontWeight: FontWeight.w700)),
+        Text(value,
+            style: GoogleFonts.cairo(
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: AppColors.textPrimary)),
+      ]),
     );
   }
 }

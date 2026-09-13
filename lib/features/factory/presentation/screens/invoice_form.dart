@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/theme/finance_widgets.dart';
 import '../../../../core/utils/currency.dart';
 import '../../../../core/utils/money.dart';
 import '../../../../core/database/hive_init.dart';
@@ -10,7 +10,8 @@ import '../../logic/factory_providers.dart';
 import '../../data/models/invoice.dart';
 import '../../data/models/product.dart';
 
-/// Req #7/#8/#9: dual-type invoices, client auto-fill, inline item removal.
+/// Standard + payment-only invoices — single SYP currency, stock guard,
+/// per-invoice custom pricing (catalog price is pre-filled but editable).
 class InvoiceFormScreen extends ConsumerStatefulWidget {
   final Invoice? invoice; // null = create
   const InvoiceFormScreen({super.key, this.invoice});
@@ -18,9 +19,10 @@ class InvoiceFormScreen extends ConsumerStatefulWidget {
 }
 class _S extends ConsumerState<InvoiceFormScreen> {
   final _form=GlobalKey<FormState>();
-  late TextEditingController name, phone, address, qty, down, notes, payAmount;
+  late TextEditingController name, phone, address, qty, priceCtrl, down, notes, payAmount;
   Product? selected;
-  AppCurrency currency = AppCurrency.syp;
+  // Single-currency architecture: entire app is SYP.
+  final AppCurrency currency = AppCurrency.syp;
   InvoiceType invType = InvoiceType.standard;
   List<InvoiceItem> lines = [];
   bool saving = false;
@@ -30,6 +32,26 @@ class _S extends ConsumerState<InvoiceFormScreen> {
   double get total => lines.fold(0.0, (s, e) => s + e.lineTotal);
   double get remaining => total - (double.tryParse(down.text) ?? 0);
 
+  /// Stock available for currently selected product (edit-aware: add back
+  /// old reserved qty so editing doesn't falsely reject).
+  double _availableFor(Product p) {
+    double oldReserved = 0;
+    if (isEdit) {
+      for (final o in widget.invoice!.effectiveItems) {
+        if (o.productId == p.id) oldReserved += o.quantity;
+      }
+    }
+    return p.stockQuantity + oldReserved;
+  }
+
+  String? get qtyStockError {
+    if (selected == null) return null;
+    final q = double.tryParse(qty.text) ?? 0;
+    if (q <= 0) return null;
+    if (q > _availableFor(selected!)) return 'الكمية غير كافية';
+    return null;
+  }
+
   @override void initState() {
     super.initState();
     final inv = widget.invoice;
@@ -37,10 +59,10 @@ class _S extends ConsumerState<InvoiceFormScreen> {
     phone = TextEditingController(text: inv?.customerPhone ?? '');
     address = TextEditingController(text: inv?.deliveryAddress ?? '');
     qty = TextEditingController(text: '1');
+    priceCtrl = TextEditingController(text: '');
     down = TextEditingController(text: inv != null && !inv.isPaymentOnly ? inv.downPayment.toString() : '');
     notes = TextEditingController(text: inv?.notes ?? '');
     payAmount = TextEditingController(text: inv != null && inv.isPaymentOnly ? inv.totalPrice.toString() : '');
-    currency = inv?.currency ?? AppCurrency.syp;
     invType = inv?.type ?? InvoiceType.standard;
     if (inv != null && inv.items.isNotEmpty) {
       lines = inv.items.map((e)=> InvoiceItem(
@@ -51,7 +73,7 @@ class _S extends ConsumerState<InvoiceFormScreen> {
 
   @override void dispose() {
     name.dispose(); phone.dispose(); address.dispose();
-    qty.dispose(); down.dispose(); notes.dispose(); payAmount.dispose();
+    qty.dispose(); priceCtrl.dispose(); down.dispose(); notes.dispose(); payAmount.dispose();
     super.dispose();
   }
 
@@ -61,13 +83,51 @@ class _S extends ConsumerState<InvoiceFormScreen> {
     return all.where((p)=> p.name.toLowerCase().contains(s) || p.category.toLowerCase().contains(s)).take(5).toList();
   }
 
+  void _onProductSelected(Product p) {
+    setState(() {
+      selected = p;
+      // Pre-fill catalog price, editable per-invoice (does NOT touch catalog).
+      priceCtrl.text = p.unitPrice.toString();
+    });
+  }
+
+  void _addLine() {
+    if (selected == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('اختر منتجاً أولاً', style: GoogleFonts.cairo())));
+      return;
+    }
+    final q = double.tryParse(qty.text) ?? 0;
+    if (q <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('أدخل كمية صحيحة', style: GoogleFonts.cairo())));
+      return;
+    }
+    // Stock guard: reject immediately.
+    if (q > _availableFor(selected!)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('الكمية غير كافية — متوفر ${_availableFor(selected!).toStringAsFixed(0)} فقط',
+              style: GoogleFonts.cairo()),
+          backgroundColor: AppColors.error));
+      setState(() {});
+      return;
+    }
+    final customPrice = double.tryParse(priceCtrl.text) ?? selected!.unitPrice;
+    if (customPrice < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('السعر غير صالح', style: GoogleFonts.cairo())));
+      return;
+    }
+    setState(()=> lines.add(InvoiceItem(
+      productId: selected!.id, productName: selected!.name,
+      quantity: q, unitPrice: customPrice, unit: selected!.unit)));
+    qty.text = '1';
+  }
+
   @override Widget build(BuildContext context){
     final products = ref.watch(productsProvider).value ?? [];
     final customers = HiveInit.customers.values.toList();
     return Scaffold(
       appBar: AppBar(title: Text(isEdit ? 'تعديل الفاتورة ${widget.invoice!.invoiceNumber}' : 'فاتورة جديدة', style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
       body: Form(key:_form, child: ListView(padding: const EdgeInsets.all(16), children:[
-        // ── Req #9: type selector ──
+        // ── Type selector ──
         Text('نوع الفاتورة *', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
         const SizedBox(height: 8),
         Row(children:[
@@ -75,14 +135,20 @@ class _S extends ConsumerState<InvoiceFormScreen> {
           const SizedBox(width: 12),
           Expanded(child: _typeOption(InvoiceType.paymentOnly, 'فاتورة دفعة', 'تسوية مالية فقط')),
         ]),
-        const SizedBox(height: 16),
-        Text('عملة الفاتورة *', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 8),
-        CurrencySelector(value: currency, onChanged: (c)=> setState(()=> currency = c)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
+          child: Row(children:[
+            const Icon(Icons.currency_exchange, size: 18, color: AppColors.goldDark),
+            const SizedBox(width: 8),
+            Text('العملة الأساسية: ل.س (ليرة سورية) — ثابتة لكل التطبيق',
+                style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.goldDark)),
+          ]),
+        ),
         const SizedBox(height: 16),
         Text('بيانات الزبون', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
         const SizedBox(height: 8),
-        // ── Req #7: smart client auto-fill ──
         Autocomplete<String>(
           initialValue: TextEditingValue(text: name.text),
           optionsBuilder: (v) {
@@ -104,7 +170,6 @@ class _S extends ConsumerState<InvoiceFormScreen> {
             }
           },
           fieldViewBuilder: (ctx, ctrl, focus, onSubmit) {
-            // Keep external controller in sync.
             if (ctrl.text != name.text && focus.hasFocus == false) {}
             return TextFormField(
               controller: ctrl,
@@ -116,7 +181,12 @@ class _S extends ConsumerState<InvoiceFormScreen> {
           },
         ),
         const SizedBox(height: 12),
-        TextFormField(controller:phone, decoration: const InputDecoration(labelText:'رقم الهاتف *', prefixIcon: Icon(Icons.phone_outlined)), keyboardType: TextInputType.phone, validator:(v)=> v!.isEmpty?'مطلوب':null),
+        TextFormField(
+          controller: phone,
+          decoration: const InputDecoration(labelText:'رقم الهاتف *', prefixIcon: Icon(Icons.phone_outlined)),
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          validator:(v)=> v!.isEmpty?'مطلوب':null),
         if (invType == InvoiceType.standard) ...[
           const SizedBox(height:12),
           TextFormField(controller:address, decoration: const InputDecoration(labelText:'عنوان التوصيل *', prefixIcon: Icon(Icons.location_on_outlined)), validator:(v)=> v!.isEmpty?'مطلوب':null),
@@ -126,10 +196,10 @@ class _S extends ConsumerState<InvoiceFormScreen> {
         const SizedBox(height: 20),
 
         if (invType == InvoiceType.paymentOnly) ...[
-          // ── Payment-only: amount only, no products ──
-          Text('مبلغ الدفعة', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
+          Text('مبلغ الدفعة (ل.س)', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          TextFormField(controller:payAmount, decoration: InputDecoration(labelText:'المبلغ (${currency.symbol}) *'), keyboardType: TextInputType.number,
+          TextFormField(controller:payAmount, decoration: const InputDecoration(labelText:'المبلغ (ل.س) *'), keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
             onChanged:(_)=> setState(()=>{}),
             validator:(v){
               if(v==null||v.isEmpty) return 'مطلوب';
@@ -142,7 +212,6 @@ class _S extends ConsumerState<InvoiceFormScreen> {
             children:[Text('مبلغ التسوية', style: GoogleFonts.cairo(color: Colors.white70)),
               Flexible(child: Text(Money.withCurrency(double.tryParse(payAmount.text) ?? 0, currency), style: GoogleFonts.cairo(color: Colors.white, fontWeight: FontWeight.w800)))])),
         ] else ...[
-          // ── Standard: multi-item draft with inline removal (Req #8) ──
           Text('المنتجات', style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           Row(children:[
@@ -151,7 +220,7 @@ class _S extends ConsumerState<InvoiceFormScreen> {
               child: Autocomplete<Product>(
                 optionsBuilder: (v) => _matchProducts(products, v.text),
                 displayStringForOption: (p)=> p.name,
-                onSelected: (p)=> setState(()=> selected = p),
+                onSelected: _onProductSelected,
                 fieldViewBuilder: (ctx, ctrl, focus, onSubmit) => TextFormField(
                   controller: ctrl, focusNode: focus,
                   decoration: const InputDecoration(labelText: 'ابحث عن منتج *', prefixIcon: Icon(Icons.inventory_2_outlined), isDense: true),
@@ -160,36 +229,50 @@ class _S extends ConsumerState<InvoiceFormScreen> {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: TextFormField(controller:qty, decoration: const InputDecoration(labelText: 'الكمية', isDense: true), keyboardType: TextInputType.number),
+              child: TextFormField(
+                controller: qty,
+                decoration: InputDecoration(
+                  labelText: 'الكمية',
+                  isDense: true,
+                  errorText: qtyStockError,
+                ),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                onChanged: (_) => setState(() {}),
+              ),
             ),
             IconButton(
               tooltip: 'إضافة للمسودة',
-              onPressed: () {
-                if (selected == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('اختر منتجاً أولاً', style: GoogleFonts.cairo())));
-                  return;
-                }
-                final q = double.tryParse(qty.text) ?? 0;
-                if (q <= 0) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('أدخل كمية صحيحة', style: GoogleFonts.cairo())));
-                  return;
-                }
-                setState(()=> lines.add(InvoiceItem(
-                  productId: selected!.id, productName: selected!.name,
-                  quantity: q, unitPrice: selected!.unitPrice, unit: selected!.unit)));
-                qty.text = '1';
-              },
+              onPressed: _addLine,
               icon: const Icon(Icons.add_circle, color: AppColors.deepNavy, size: 28),
             ),
           ]),
-          if (selected != null)
+          if (selected != null) ...[
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text('${selected!.name} • ${Money.withCurrency(selected!.unitPrice, selected!.currency)}/${selected!.unit} • متوفر ${selected!.stockQuantity.toStringAsFixed(0)}',
+              child: Text('${selected!.name} • سعر الكتالوج ${Money.withCurrency(selected!.unitPrice, AppCurrency.syp)}/${selected!.unit} • متوفر ${_availableFor(selected!).toStringAsFixed(0)}',
                   style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textSecondary)),
             ),
+            const SizedBox(height: 8),
+            // Per-invoice custom price (editable, invoice-scoped only).
+            TextFormField(
+              controller: priceCtrl,
+              decoration: const InputDecoration(
+                labelText: 'سعر الوحدة في هذه الفاتورة (ل.س) * — قابل للتعديل (خصم/سعر خاص)',
+                prefixIcon: Icon(Icons.price_change_outlined),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+              validator: (v) {
+                if (v == null || v.isEmpty) return 'مطلوب';
+                final p = double.tryParse(v);
+                if (p == null || p < 0) return 'غير صالح';
+                return null;
+              },
+            ),
+          ],
           const SizedBox(height: 12),
-          // Draft list with corner delete icon (Req #8).
           if (lines.isEmpty)
             Container(padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.border)),
@@ -226,7 +309,9 @@ class _S extends ConsumerState<InvoiceFormScreen> {
               ),
             ]),
           const SizedBox(height: 12),
-          TextFormField(controller:down, decoration: const InputDecoration(labelText:'الدفعة الأولى'), keyboardType: TextInputType.number, onChanged:(_)=> setState(()=>{}),
+          TextFormField(controller:down, decoration: const InputDecoration(labelText:'الدفعة الأولى (ل.س)'), keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+            onChanged:(_)=> setState(()=>{}),
             validator:(v){
               if(v==null||v.isEmpty) return null;
               final d = double.tryParse(v);
@@ -238,7 +323,7 @@ class _S extends ConsumerState<InvoiceFormScreen> {
           Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: AppColors.navyCard, borderRadius: BorderRadius.circular(16)), child: Column(children:[
             Row(mainAxisAlignment:MainAxisAlignment.spaceBetween, children:[Text('الإجمالي (${lines.length} صنف)', style: GoogleFonts.cairo(color: Colors.white70)), Flexible(child: Text(Money.withCurrency(total, currency), style: GoogleFonts.cairo(color: Colors.white, fontWeight: FontWeight.w800)))]),
             const Divider(color: Colors.white24),
-            Row(mainAxisAlignment:MainAxisAlignment.spaceBetween, children:[Text('الدفعة', style: GoogleFonts.cairo(color: Colors.white70)), Text(Money.withCurrency(double.tryParse(down.text) ?? 0, currency), style: GoogleFonts.cairo(color: AppColors.success, fontWeight: FontWeight.w700))]),
+            Row(mainAxisAlignment:MainAxisAlignment.spaceBetween, children:[Text('الدفعة الأولى', style: GoogleFonts.cairo(color: Colors.white70)), Text(Money.withCurrency(double.tryParse(down.text) ?? 0, currency), style: GoogleFonts.cairo(color: AppColors.success, fontWeight: FontWeight.w700))]),
             const SizedBox(height:4),
             Row(mainAxisAlignment:MainAxisAlignment.spaceBetween, children:[Text('المتبقي (دين)', style: GoogleFonts.cairo(color: Colors.white70)), Flexible(child: Text(Money.withCurrency(remaining, currency), style: GoogleFonts.cairo(color: AppColors.error, fontWeight: FontWeight.w800)))]),
           ])),
@@ -246,6 +331,28 @@ class _S extends ConsumerState<InvoiceFormScreen> {
         const SizedBox(height: 24),
         SizedBox(width:double.infinity, child: ElevatedButton(onPressed: saving ? null : () async {
           if(!_form.currentState!.validate()) return;
+          // Final stock guard before save (all lines).
+          if (invType == InvoiceType.standard) {
+            for (final l in lines) {
+              Product? prod;
+              try { prod = products.firstWhere((p)=> p.id == l.productId); } catch (_) { prod = null; }
+              prod ??= HiveInit.products.get(l.productId);
+              if (prod == null) {
+                if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('منتج غير موجود: ${l.productName}', style: GoogleFonts.cairo()), backgroundColor: AppColors.error));
+                return;
+              }
+              double oldReserved = 0;
+              if (isEdit) {
+                for (final o in widget.invoice!.effectiveItems) {
+                  if (o.productId == l.productId) oldReserved += o.quantity;
+                }
+              }
+              if (l.quantity > prod.stockQuantity + oldReserved) {
+                if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('الكمية غير كافية لـ ${l.productName}', style: GoogleFonts.cairo()), backgroundColor: AppColors.error));
+                return;
+              }
+            }
+          }
           setState(()=> saving = true);
           try{
             if (invType == InvoiceType.paymentOnly) {

@@ -21,9 +21,7 @@ class DashboardScreen extends ConsumerWidget {
     final projects = ref.watch(projectsProvider).value ?? [];
     ref.watch(transactionsProvider);
 
-    final debtUsd = FinanceEngine.totalClientDebt(currency: AppCurrency.usd);
     final debtSyp = FinanceEngine.totalClientDebt(currency: AppCurrency.syp);
-    final payUsd = FinanceEngine.totalPayableDebt(currency: AppCurrency.usd);
     final paySyp = FinanceEngine.totalPayableDebt(currency: AppCurrency.syp);
     final lowStock = products.where((p)=> p.isLowStock).toList();
     final unpaidProjects = FinanceEngine.projectsWithUnpaidPersonnel();
@@ -53,13 +51,7 @@ class DashboardScreen extends ConsumerWidget {
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerRight,
-              child: Row(children:[
-                Text(Money.withCurrency(debtSyp, AppCurrency.syp), style: GoogleFonts.cairo(color: Colors.white, fontSize:24, fontWeight: FontWeight.w900)),
-                const SizedBox(width:12),
-                Text('+', style: GoogleFonts.cairo(color: Colors.white54, fontSize:18)),
-                const SizedBox(width:12),
-                Text(Money.withCurrency(debtUsd, AppCurrency.usd), style: GoogleFonts.cairo(color: const Color(0xFFFDE68A), fontSize:24, fontWeight: FontWeight.w900)),
-              ]),
+              child: Text(Money.withCurrency(debtSyp, AppCurrency.syp), style: GoogleFonts.cairo(color: Colors.white, fontSize:24, fontWeight: FontWeight.w900)),
             ),
             const SizedBox(height:12),
             Wrap(spacing:8, runSpacing:8, children:[
@@ -83,13 +75,13 @@ class DashboardScreen extends ConsumerWidget {
           childAspectRatio: 1.15,
           children: [
             _kpi(context,
-              title: 'ديون مستحقة لنا',
-              amount: '${Money.withCurrency(debtSyp, AppCurrency.syp)}\n${Money.withCurrency(debtUsd, AppCurrency.usd)}',
+              title: 'لنا — ديون مستحقة لنا (ل.س)',
+              amount: Money.withCurrency(debtSyp, AppCurrency.syp),
               icon: Icons.trending_up, color: AppColors.error,
               onTap: ()=> Navigator.push(context, MaterialPageRoute(builder:(_)=> const DebtBreakdownScreen(receivable: true)))),
             _kpi(context,
-              title: 'ديون علينا للآخرين',
-              amount: '${Money.withCurrency(paySyp, AppCurrency.syp)}\n${Money.withCurrency(payUsd, AppCurrency.usd)}',
+              title: 'علينا — ديون للآخرين (ل.س)',
+              amount: Money.withCurrency(paySyp, AppCurrency.syp),
               icon: Icons.payments_outlined, color: const Color(0xFFB45309),
               onTap: ()=> Navigator.push(context, MaterialPageRoute(builder:(_)=> const DebtBreakdownScreen(receivable: false)))),
             _kpi(context,

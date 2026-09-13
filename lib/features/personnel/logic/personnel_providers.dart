@@ -23,22 +23,25 @@ class PersonnelService {
     required String phone,
     String location = '',
     String extra = '',
+    String suppliedMaterials = '',
   }) async {
     if (name.trim().isEmpty) throw Exception('الاسم مطلوب');
     if (phone.trim().isEmpty) throw Exception('الهاتف مطلوب');
     final p = PersonnelEntry(
         role: role, name: name.trim(), phone: phone.trim(),
-        location: location.trim(), extra: extra.trim());
+        location: location.trim(), extra: extra.trim(),
+        suppliedMaterials: suppliedMaterials.trim());
     await HiveInit.personnel.put(p.id, p);
     return p;
   }
 
   Future<void> update(PersonnelEntry p,
-      {required String name, required String phone, String? location, String? extra}) async {
+      {required String name, required String phone, String? location, String? extra, String? suppliedMaterials}) async {
     p.name = name.trim();
     p.phone = phone.trim();
     if (location != null) p.location = location.trim();
     if (extra != null) p.extra = extra.trim();
+    if (suppliedMaterials != null) p.suppliedMaterials = suppliedMaterials.trim();
     await p.save();
   }
 

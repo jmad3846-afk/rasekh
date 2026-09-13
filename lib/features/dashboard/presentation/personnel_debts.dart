@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/widgets.dart';
 import '../../../../core/theme/finance_widgets.dart';
+import '../../../../core/utils/currency.dart';
 import '../../../../core/utils/money.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../finance/logic/finance_engine.dart';
@@ -56,7 +57,8 @@ class UnpaidPersonnelScreen extends ConsumerWidget {
                                   style: GoogleFonts.cairo(
                                       fontWeight: FontWeight.w800),
                                   overflow: TextOverflow.ellipsis)),
-                          CurrencyBadge(pr.currency),
+                          // Sprint 2026-09 Task 1: SYP-only drill-down.
+                          const CurrencyBadge(AppCurrency.syp),
                         ]),
                         Text('${pr.clientName} • ${pending.length} شخص معلق',
                             style: GoogleFonts.cairo(
@@ -64,7 +66,7 @@ class UnpaidPersonnelScreen extends ConsumerWidget {
                                 color: AppColors.textSecondary)),
                         const SizedBox(height: 4),
                         Text(
-                            'إجمالي معلق: ${Money.withCurrency(totalPending, pr.currency)}',
+                            'إجمالي معلق: ${Money.withCurrency(totalPending, AppCurrency.syp)}',
                             style: GoogleFonts.cairo(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w800,
@@ -136,7 +138,7 @@ class ProjectPersonnelScreen extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           Text(
-                              'متبقي ${Money.withCurrency(b.remaining, project.currency)}',
+                              'متبقي ${Money.withCurrency(b.remaining, AppCurrency.syp)}',
                               style: GoogleFonts.cairo(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w800,
@@ -144,7 +146,7 @@ class ProjectPersonnelScreen extends ConsumerWidget {
                                       ? AppColors.error
                                       : AppColors.success)),
                           Text(
-                              'مدفوع ${Money.withCurrency(b.paid, project.currency)}',
+                              'مدفوع ${Money.withCurrency(b.paid, AppCurrency.syp)}',
                               style: GoogleFonts.cairo(
                                   fontSize: 11,
                                   color: AppColors.textSecondary)),
@@ -173,7 +175,6 @@ class PersonProfileScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(transactionsProvider);
-    final project = HiveInit.projects.get(projectId);
     final parts = partyKey.split('|');
     final pid = parts.length > 1 ? parts.sublist(1).join('|') : partyKey;
     final txs = HiveInit.transactions.values
@@ -190,7 +191,8 @@ class PersonProfileScreen extends ConsumerWidget {
     }
     final first = txs.first;
     final s = FinanceEngine.personSummary(txs);
-    final cur = project?.currency ?? first.currency;
+    // Sprint 2026-09 Task 1: SYP-only drill-down.
+    const cur = AppCurrency.syp;
     return Scaffold(
       appBar: AppBar(
           title: Text(first.partyName,
@@ -244,7 +246,8 @@ class PersonProfileScreen extends ConsumerWidget {
                                     fontWeight: FontWeight.w700),
                                 overflow: TextOverflow.ellipsis)),
                         const SizedBox(width: 6),
-                        CurrencyBadge(t.currency),
+                        // Sprint 2026-09 Task 1: SYP-only.
+                        const CurrencyBadge(AppCurrency.syp),
                       ]),
                       Text('${t.reason} • ${t.createdAt.toString().substring(0, 10)}',
                           style: GoogleFonts.cairo(
@@ -252,7 +255,7 @@ class PersonProfileScreen extends ConsumerWidget {
                               color: AppColors.textSecondary)),
                     ])),
                 Text(
-                    '${t.type.toString().contains('payment') ? '-' : '+'}${Money.withCurrency(t.amount, t.currency)}',
+                    '${t.type.toString().contains('payment') ? '-' : '+'}${Money.withCurrency(t.amount, AppCurrency.syp)}',
                     style: GoogleFonts.cairo(
                         fontWeight: FontWeight.w800, fontSize: 12)),
               ])),
