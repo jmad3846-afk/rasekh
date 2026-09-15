@@ -24,7 +24,7 @@ class MyApp extends StatelessWidget {
   const MyApp({super.key});
   @override Widget build(BuildContext context){
     return MaterialApp(
-      title: 'معمل و تعهدات',
+      title: 'راسخ',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       locale: const Locale('ar'),
