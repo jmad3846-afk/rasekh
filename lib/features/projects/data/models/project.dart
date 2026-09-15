@@ -18,21 +18,45 @@ class Project extends HiveObject {
   @HiveField(11) double completedCost; // sum of completed only
   @HiveField(12) String clientId; // link to Customer-like ledger
   @HiveField(13) AppCurrency currency;
+  @HiveField(14) String ownerName;
+  @HiveField(15) String ownerPhone;
+  @HiveField(16) String ownerId;
 
   Project({
-    String? id, required this.clientName, required this.clientPhone, required this.location,
-    required this.totalArea, required this.buildingArea, required this.roomCount,
-    required this.description, List<String>? photoPaths, DateTime? createdAt,
-    this.totalCost=0, this.completedCost=0, String? clientId,
+    String? id,
+    required this.clientName,
+    required this.clientPhone,
+    required this.location,
+    required this.totalArea,
+    required this.buildingArea,
+    required this.roomCount,
+    required this.description,
+    List<String>? photoPaths,
+    DateTime? createdAt,
+    this.totalCost = 0,
+    this.completedCost = 0,
+    String? clientId,
     this.currency = AppCurrency.syp,
-  }) : id=id??const Uuid().v4(), photoPaths=photoPaths??[], createdAt=createdAt??DateTime.now(), clientId=clientId?? const Uuid().v4();
+    String? ownerName,
+    String? ownerPhone,
+    String? ownerId,
+  }) : id = id ?? const Uuid().v4(),
+       photoPaths = photoPaths ?? [],
+       createdAt = createdAt ?? DateTime.now(),
+       clientId = clientId ?? const Uuid().v4(),
+       ownerName = ownerName?.trim().isNotEmpty == true ? ownerName! : clientName,
+       ownerPhone = ownerPhone?.trim().isNotEmpty == true ? ownerPhone! : clientPhone,
+       ownerId = ownerId ?? const Uuid().v4();
 
   Map<String,dynamic> toJson()=> {
     'id':id,'clientName':clientName,'clientPhone':clientPhone,'location':location,
     'totalArea':totalArea,'buildingArea':buildingArea,'roomCount':roomCount,
     'description':description,'photoPaths':photoPaths,'createdAt':createdAt.toIso8601String(),
     'totalCost':totalCost,'completedCost':completedCost,'clientId':clientId,
-    'currency':currency.code
+    'currency':currency.code,
+    'ownerName': ownerName,
+    'ownerPhone': ownerPhone,
+    'ownerId': ownerId,
   };
   factory Project.fromJson(Map<String,dynamic> j)=> Project(
     id:j['id'],clientName:j['clientName'],clientPhone:j['clientPhone'],location:j['location'],
@@ -41,6 +65,9 @@ class Project extends HiveObject {
     createdAt:DateTime.parse(j['createdAt']),totalCost:(j['totalCost'] as num).toDouble(),
     completedCost:(j['completedCost'] as num).toDouble(),clientId:j['clientId'],
     currency: AppCurrencyX.fromString(j['currency'] as String?),
+    ownerName: j['ownerName'] as String? ?? j['clientName'] as String? ?? '',
+    ownerPhone: j['ownerPhone'] as String? ?? j['clientPhone'] as String? ?? '',
+    ownerId: j['ownerId'] as String?,
   );
 }
 
@@ -58,6 +85,22 @@ class ProjectAdapter extends TypeAdapter<Project> {
     } catch (_) {
       p.currency = AppCurrency.syp;
     }
+    // Backward-compatible owner metadata fields.
+    try {
+      p.ownerName = r.readString();
+    } catch (_) {
+      p.ownerName = p.clientName;
+    }
+    try {
+      p.ownerPhone = r.readString();
+    } catch (_) {
+      p.ownerPhone = p.clientPhone;
+    }
+    try {
+      p.ownerId = r.readString();
+    } catch (_) {
+      p.ownerId = const Uuid().v4();
+    }
     return p;
   }
   @override void write(BinaryWriter w, Project o){
@@ -65,5 +108,8 @@ class ProjectAdapter extends TypeAdapter<Project> {
     w.writeDouble(o.totalArea);w.writeDouble(o.buildingArea);w.writeInt(o.roomCount);w.writeString(o.description);
     w.writeList(o.photoPaths);w.writeInt(o.createdAt.millisecondsSinceEpoch);w.writeDouble(o.totalCost);w.writeDouble(o.completedCost);w.writeString(o.clientId);
     w.writeInt(o.currency.index);
+    w.writeString(o.ownerName);
+    w.writeString(o.ownerPhone);
+    w.writeString(o.ownerId);
   }
 }

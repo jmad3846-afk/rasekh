@@ -21,8 +21,8 @@ class DashboardScreen extends ConsumerWidget {
     final projects = ref.watch(projectsProvider).value ?? [];
     ref.watch(transactionsProvider);
 
-    final debtSyp = FinanceEngine.totalClientDebt(currency: AppCurrency.syp);
-    final paySyp = FinanceEngine.totalPayableDebt(currency: AppCurrency.syp);
+    final debtSyp = FinanceEngine.factoryReceivableDebt(currency: AppCurrency.syp);
+    final paySyp = FinanceEngine.factoryPayableDebt(currency: AppCurrency.syp);
     final lowStock = products.where((p)=> p.isLowStock).toList();
     final unpaidProjects = FinanceEngine.projectsWithUnpaidPersonnel();
 

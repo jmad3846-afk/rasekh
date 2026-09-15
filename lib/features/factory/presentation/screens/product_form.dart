@@ -12,6 +12,12 @@ import '../../../../core/utils/money.dart';
 class ProductFormSheet extends ConsumerStatefulWidget {
   final Product? product;
   const ProductFormSheet({super.key, this.product});
+  static String? optionalCategoryValidator(String? value) {
+    if (value == null) return null;
+    final cleaned = value.trim();
+    return cleaned.isEmpty ? null : null;
+  }
+
   @override ConsumerState<ProductFormSheet> createState()=> _S();
 }
 class _S extends ConsumerState<ProductFormSheet> {
@@ -83,7 +89,11 @@ class _S extends ConsumerState<ProductFormSheet> {
                 style: GoogleFonts.cairo(fontSize: 11, color: AppColors.error, fontWeight: FontWeight.w700)),
           ),
         const SizedBox(height:12),
-        TextFormField(controller:category, decoration: const InputDecoration(labelText:'الفئة *', hintText:'سمنت / حديد / رمل'), validator:(v)=> v!.isEmpty?'مطلوب':null),
+        TextFormField(
+          controller: category,
+          decoration: const InputDecoration(labelText: 'الفئة', hintText: 'سمنت / حديد / رمل'),
+          validator: ProductFormSheet.optionalCategoryValidator,
+        ),
         const SizedBox(height:12),
         Row(children:[
           Expanded(child: TextFormField(controller:price, decoration: const InputDecoration(labelText:'سعر الوحدة (ل.س) *'), keyboardType: TextInputType.number, inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))], onChanged:(_)=> setState(()=>{}), validator:(v)=> v!.isEmpty?'مطلوب':null)),

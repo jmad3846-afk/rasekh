@@ -218,13 +218,14 @@ class DailyLogDetailScreen extends ConsumerWidget {
                           kind: SiteProcedureKind.worker))),
               style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.deepNavy,
-                  foregroundColor: Colors.white),
-              icon: const Icon(Icons.groups, size: 18),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4)),
+              icon: const Icon(Icons.groups, size: 16),
               label: Text('إجرائية عامل',
-                  style: GoogleFonts.cairo(fontSize: 12)),
+                  style: GoogleFonts.cairo(fontSize: 11, fontWeight: FontWeight.w700)),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: ElevatedButton.icon(
               onPressed: () => Navigator.push(
@@ -236,10 +237,30 @@ class DailyLogDetailScreen extends ConsumerWidget {
                           kind: SiteProcedureKind.master))),
               style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.gold,
-                  foregroundColor: Colors.white),
-              icon: const Icon(Icons.engineering, size: 18),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4)),
+              icon: const Icon(Icons.engineering, size: 16),
               label: Text('إجرائية معلم',
-                  style: GoogleFonts.cairo(fontSize: 12)),
+                  style: GoogleFonts.cairo(fontSize: 11, fontWeight: FontWeight.w700)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => SiteProcedureFormScreen(
+                          project: project,
+                          log: log,
+                          kind: SiteProcedureKind.cashExpense))),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0D9488), // Teal/emerald
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4)),
+              icon: const Icon(Icons.payments_outlined, size: 16),
+              label: Text('مصروف نقدي',
+                  style: GoogleFonts.cairo(fontSize: 11, fontWeight: FontWeight.w700)),
             ),
           ),
         ]),
@@ -247,7 +268,7 @@ class DailyLogDetailScreen extends ConsumerWidget {
         if (procs.isEmpty)
           GlassCard(
               child: Center(
-                  child: Text('لا توجد إجرائيات في هذه اليومية',
+                  child: Text('لا توجد إجرائيات أو مصروفات في هذه اليومية',
                       style: GoogleFonts.cairo(
                           color: AppColors.textSecondary)))),
         for (final p in procs) _procCard(context, ref, p),
@@ -256,6 +277,7 @@ class DailyLogDetailScreen extends ConsumerWidget {
   }
 
   Widget _procCard(BuildContext context, WidgetRef ref, SiteProcedure p) {
+    final isCash = p.kind == SiteProcedureKind.cashExpense;
     final isWorker = p.kind == SiteProcedureKind.worker;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -268,30 +290,41 @@ class DailyLogDetailScreen extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                      color: isWorker
-                          ? AppColors.deepNavy
-                          : AppColors.goldLight,
+                      color: isCash
+                          ? const Color(0xFF0D9488)
+                          : isWorker
+                              ? AppColors.deepNavy
+                              : AppColors.goldLight,
                       borderRadius: BorderRadius.circular(20)),
-                  child: Text(isWorker ? 'عامل' : 'معلم',
+                  child: Text(
+                      isCash
+                          ? 'مصروف نقدي'
+                          : isWorker
+                              ? 'عامل'
+                              : 'معلم',
                       style: GoogleFonts.cairo(
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
-                          color: isWorker
+                          color: (isCash || isWorker)
                               ? Colors.white
                               : AppColors.goldDark))),
               const SizedBox(width: 8),
               Expanded(
-                  child: Text(p.personName,
+                  child: Text(
+                      isCash
+                          ? (p.description.isNotEmpty ? p.description : 'مصروف نقدي')
+                          : p.personName,
                       style:
                           GoogleFonts.cairo(fontWeight: FontWeight.w800),
                       overflow: TextOverflow.ellipsis)),
               CurrencyBadge(p.currency),
             ]),
-            if (p.description.isNotEmpty)
+            if (!isCash && p.description.isNotEmpty)
               Text(p.description,
                   style: GoogleFonts.cairo(
                       fontSize: 12, color: AppColors.textSecondary)),
-            if (!isWorker &&
+            if (!isCash &&
+                !isWorker &&
                 p.contractType == MasterContractType.lumpSum) ...[
               Text('مقطوع: ${Money.withCurrency(p.agreedTotal, p.currency)}',
                   style: GoogleFonts.cairo(
@@ -303,12 +336,12 @@ class DailyLogDetailScreen extends ConsumerWidget {
                         color: AppColors.textSecondary,
                         fontStyle: FontStyle.italic)),
             ],
-            if (p.consumedMaterials.isNotEmpty)
+            if (!isCash && p.consumedMaterials.isNotEmpty)
               Text(
                   'مواد مستهلكة: ${p.consumedMaterials.map((c) => '${c.materialName} ×${c.quantity}').join('، ')}',
                   style: GoogleFonts.cairo(
                       fontSize: 11, color: AppColors.textSecondary)),
-            if (p.needVehicle)
+            if (!isCash && p.needVehicle)
               Text(
                   'نقل: ${p.driverName} • ${Money.withCurrency(p.driverWage, p.currency)}${p.transportNotes.isEmpty ? '' : ' • ${p.transportNotes}'}',
                   style: GoogleFonts.cairo(
@@ -324,9 +357,8 @@ class DailyLogDetailScreen extends ConsumerWidget {
                       fontWeight: FontWeight.w800,
                       color: AppColors.deepNavy)),
               const Spacer(),
-              // Sprint 2026-09 Task 2: full edit for worker/master procedures.
               IconButton(
-                tooltip: 'تعديل الإجرائية',
+                tooltip: 'تعديل',
                 icon: const Icon(Icons.edit_outlined,
                     color: AppColors.deepNavy, size: 20),
                 onPressed: () => Navigator.push(
@@ -339,14 +371,14 @@ class DailyLogDetailScreen extends ConsumerWidget {
                             existing: p))),
               ),
               IconButton(
-                tooltip: 'حذف الإجرائية',
+                tooltip: 'حذف',
                 icon: const Icon(Icons.delete_outline,
                     color: AppColors.error, size: 20),
                 onPressed: () async {
                   final ok = await confirmDelete(context,
-                      title: 'حذف الإجرائية؟',
+                      title: 'حذف الإدخال؟',
                       message:
-                          'سيتم عكس القيد المالي وإرجاع المواد المستهلكة للمخزون.');
+                          'سيتم عكس القيد المالي وإلغاء هذا المصروف/الإجرائية.');
                   if (ok) {
                     await ref
                         .read(siteServiceProvider)

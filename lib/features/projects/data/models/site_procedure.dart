@@ -1,12 +1,15 @@
 import 'package:hive/hive.dart';
 import 'package:uuid/uuid.dart';
 import '../../../../core/utils/currency.dart';
+import '../../../../core/database/hive_init.dart';
+
 
 /// Req #11: new contracting procedure model (lives inside a DailyLog).
 @HiveType(typeId: 20)
 enum SiteProcedureKind {
   @HiveField(0) worker, // إجرائية عامل
   @HiveField(1) master, // إجرائية معلم
+  @HiveField(2) cashExpense, // مصروفات نقدية
 }
 
 class SiteProcedureKindAdapter extends TypeAdapter<SiteProcedureKind> {
@@ -70,9 +73,9 @@ class ConsumedMaterialAdapter extends TypeAdapter<ConsumedMaterial> {
   }
 }
 
-/// Req #11 – Type 1 (worker) & Type 2 (master) procedures.
+/// Req #11 – Type 1 (worker) & Type 2 (master) & Type 3 (cashExpense) procedures.
 ///
-/// Total cost = worker/master wage + driver wage (transport).
+/// Total cost = worker/master wage + driver wage (transport) + consumed materials cost.
 @HiveType(typeId: 18)
 class SiteProcedure extends HiveObject {
   @HiveField(0) String id;
@@ -88,7 +91,7 @@ class SiteProcedure extends HiveObject {
   @HiveField(8) String masterName;
   @HiveField(9) MasterContractType contractType;
   @HiveField(10) double dailyRate;
-  @HiveField(11) String description; // work done / procedure description
+  @HiveField(11) String description; // work done / procedure description / cash expense reason
   @HiveField(12) double agreedTotal; // lump-sum total agreed price
   @HiveField(13) String agreementPerUnit; // كم متفقين عالوحدة (info only)
   // Shared
@@ -134,14 +137,31 @@ class SiteProcedure extends HiveObject {
   }
 
   double get baseWage {
+    if (kind == SiteProcedureKind.cashExpense) return workerWage > 0 ? workerWage : agreedTotal;
     if (kind == SiteProcedureKind.worker) return workerWage;
     return contractType == MasterContractType.daily ? dailyRate : agreedTotal;
   }
 
-  String get personName => kind == SiteProcedureKind.worker ? workerName : masterName;
+  String get personName {
+    if (kind == SiteProcedureKind.cashExpense) return description.isNotEmpty ? description : 'مصروف نقدي';
+    return kind == SiteProcedureKind.worker ? workerName : masterName;
+  }
 
   void recalc() {
-    totalCost = baseWage + (needVehicle ? driverWage : 0);
+    if (kind == SiteProcedureKind.cashExpense) {
+      totalCost = baseWage;
+      return;
+    }
+    double matCost = 0;
+    for (final c in consumedMaterials) {
+      try {
+        final mat = HiveInit.requiredMaterials.get(c.materialId);
+        if (mat != null && mat.unitPrice > 0) {
+          matCost += c.quantity * mat.unitPrice;
+        }
+      } catch (_) {}
+    }
+    totalCost = baseWage + (needVehicle ? driverWage : 0) + matCost;
   }
 
   Map<String, dynamic> toJson() => {

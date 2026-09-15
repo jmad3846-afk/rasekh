@@ -5,26 +5,31 @@
 // gestures. You can also use WidgetTester to find child widgets in the widget
 // tree, read text, and verify that the values of widget properties are correct.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:factory_managment/main.dart';
+import 'package:factory_managment/features/factory/data/models/stock_log.dart';
+import 'package:factory_managment/features/factory/presentation/screens/product_form.dart';
+import 'package:factory_managment/features/finance/logic/finance_engine.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('Category field validator accepts a blank string', () {
+    expect(ProductFormSheet.optionalCategoryValidator(''), isNull);
+    expect(ProductFormSheet.optionalCategoryValidator('   '), isNull);
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  test('Stock log query can match by supplier or person name', () {
+    final log = StockLog(
+      productId: 'p1',
+      productName: 'سمنت',
+      quantityAdded: 10,
+      purchaseCost: 100,
+      supplierName: 'فارس المورد',
+      supplierPhone: '09991110011',
+      suppliedMaterials: 'سمنت',
+      notes: 'restock',
+    );
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(FinanceEngine.matchesStockLogQuery(log, 'فارس'), isTrue);
+    expect(FinanceEngine.matchesStockLogQuery(log, '09991110011'), isTrue);
+    expect(FinanceEngine.matchesStockLogQuery(log, 'غير موجود'), isFalse);
   });
 }

@@ -11,11 +11,14 @@ import '../../../../core/database/hive_init.dart';
 import '../../data/models/transaction.dart';
 import '../../logic/finance_engine.dart';
 import '../../../factory/presentation/screens/inventory_suppliers_screen.dart';
+import '../../../projects/data/models/project.dart';
+
 
 /// Req #2 / #5 / #6 + Sprint 2026-09 Task 3: strictly separated finance.
 /// Tab 0 = Client/Factory ONLY (factory invoices, no project link).
 /// Tab 1 = Project/Contracting (project list -> 4-role workspace).
 /// Tab 2 = Inventory Suppliers (موردو مخزون المعمل, factory scope only).
+/// Tab 3 = Project Owners (أصحاب التعهدات, open owner-fund ledger).
 class LedgerScreen extends ConsumerStatefulWidget {
   const LedgerScreen({super.key});
   @override ConsumerState<LedgerScreen> createState()=> _S();
@@ -25,7 +28,7 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
   final searchCtrl = TextEditingController();
   String personQuery = '';
 
-  @override void initState(){ super.initState(); tab=TabController(length:3, vsync:this); }
+  @override void initState(){ super.initState(); tab=TabController(length:4, vsync:this); }
   @override void dispose(){ tab.dispose(); searchCtrl.dispose(); super.dispose(); }
 
   @override Widget build(BuildContext context){
@@ -35,6 +38,7 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
         Tab(text:'مالية المعمل والعملاء', icon: Icon(Icons.factory_outlined, size: 18)),
         Tab(text:'مالية التعهدات', icon: Icon(Icons.business_outlined, size: 18)),
         Tab(text:'موردو المخزون', icon: Icon(Icons.local_shipping_outlined, size: 18)),
+        Tab(text:'أصحاب التعهدات', icon: Icon(Icons.account_balance_wallet_outlined, size: 18)),
       ])),
       body: Column(children:[
         // ── Unified person search (Req #6, no filter chips) ──
@@ -61,6 +65,7 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
           _factoryClientsTab(),
           _contractingProjectsTab(),
           const InventorySuppliersTab(),
+          _projectOwnersTab(),
         ])),
       ]),
     );
@@ -202,7 +207,635 @@ class _S extends ConsumerState<LedgerScreen> with SingleTickerProviderStateMixin
       case TransactionParty.worker: return 'عامل';
       case TransactionParty.supplier: return 'مورد';
       case TransactionParty.driver: return 'سائق';
+      case TransactionParty.owner: return 'صاحب تعهد';
     }
+  }
+
+  Widget _projectOwnersTab() {
+    final allProjects = HiveInit.projects.values.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    final filteredProjects = allProjects.where((p) {
+      if (personQuery.trim().isEmpty) return true;
+      final q = personQuery.trim().toLowerCase();
+      return p.ownerName.toLowerCase().contains(q) ||
+          p.clientName.toLowerCase().contains(q) ||
+          p.location.toLowerCase().contains(q) ||
+          p.ownerPhone.toLowerCase().contains(q);
+    }).toList();
+
+    if (allProjects.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.account_balance_wallet_outlined, size: 48, color: AppColors.textSecondary),
+              const SizedBox(height: 12),
+              Text(
+                'لا توجد مشاريع مضافة بعد',
+                style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize: 16, color: AppColors.textPrimary),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'عند إضافة أي مشروع جديد، سيظهر صاحب التعهد تلقائياً هنا لمتابعة السحوبات والمصروفات.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.cairo(fontSize: 12, color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (filteredProjects.isEmpty) {
+      return Center(
+        child: Text(
+          'لا يوجد صاحب تعهد مطابق للبحث "$personQuery"',
+          style: GoogleFonts.cairo(color: AppColors.textSecondary),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: filteredProjects.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 14),
+      itemBuilder: (_, i) {
+        final project = filteredProjects[i];
+        final fin = FinanceEngine.getProjectOwnerFinancials(project);
+        return _buildProjectOwnerCard(fin);
+      },
+    );
+  }
+
+  Widget _buildProjectOwnerCard(ProjectOwnerFinancials fin) {
+    final isDeficit = fin.isDeficit;
+    return GlassCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header: Owner Name & Project Name
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: isDeficit ? AppColors.errorBg : AppColors.goldLight,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  Icons.person_pin_outlined,
+                  color: isDeficit ? AppColors.error : AppColors.goldDark,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            fin.ownerName,
+                            style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize: 15),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.background,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: Text(
+                            'ل.س',
+                            style: GoogleFonts.cairo(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.goldDark),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      'مشروع: ${fin.projectLocation} • ${fin.ownerPhone}',
+                      style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textSecondary),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // 3 Metric Badges: Drawn, Expenses, Net Balance
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.background,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.border.withOpacity(0.6)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'المسحوبات',
+                        style: GoogleFonts.cairo(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          Money.withCurrency(fin.drawnFunds, AppCurrency.syp),
+                          style: GoogleFonts.cairo(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.deepNavy),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.background,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.border.withOpacity(0.6)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'المصروفات والإجرائيات',
+                        style: GoogleFonts.cairo(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          Money.withCurrency(fin.disbursedExpenses, AppCurrency.syp),
+                          style: GoogleFonts.cairo(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Net Floating Balance Card (Surplus / Deficit)
+          InkWell(
+            onTap: () => _showOwnerDeficitAuditModal(context, fin),
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: isDeficit ? AppColors.errorBg : AppColors.successBg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: isDeficit ? AppColors.error.withOpacity(0.3) : AppColors.success.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isDeficit ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+                    size: 18,
+                    color: isDeficit ? AppColors.error : AppColors.success,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isDeficit ? 'نقص رصيد (تم الدفع من الخزينة)' : 'زيادة رصيد (فائض في الخزينة)',
+                          style: GoogleFonts.cairo(fontSize: 11, fontWeight: FontWeight.w700, color: isDeficit ? AppColors.error : AppColors.success),
+                        ),
+                        Text(
+                          isDeficit
+                              ? 'عجز بقيمة ${Money.withCurrency(fin.deficitAmount, AppCurrency.syp)} — اضغط لعرض التفاصيل'
+                              : 'فائض بقيمة ${Money.withCurrency(fin.surplusAmount, AppCurrency.syp)}',
+                          style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w900, color: isDeficit ? AppColors.error : AppColors.success),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.arrow_forward_ios,
+                    size: 14,
+                    color: isDeficit ? AppColors.error : AppColors.success,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Control Action Buttons
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: ElevatedButton.icon(
+                  onPressed: () => _showDrawOwnerFundsModal(context, fin.project),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.gold,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.add_card, size: 18),
+                  label: Text(
+                    'سحب رصيد من صاحب التعهد',
+                    style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showOwnerDeficitAuditModal(context, fin),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    side: const BorderSide(color: AppColors.deepNavy),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.receipt_long_outlined, size: 16, color: AppColors.deepNavy),
+                  label: Text(
+                    'كشف الإجرائيات',
+                    style: GoogleFonts.cairo(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.deepNavy),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDrawOwnerFundsModal(BuildContext context, Project project, {double? initialAmount}) {
+    final amountCtrl = TextEditingController(
+      text: initialAmount != null && initialAmount > 0 ? initialAmount.toStringAsFixed(0) : '',
+    );
+    final notesCtrl = TextEditingController(text: 'سحب رصيد نقدي لصالح خزانة المشروع');
+    DateTime selectedDate = DateTime.now();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setD) {
+          final amt = double.tryParse(amountCtrl.text) ?? 0.0;
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                const Icon(Icons.account_balance_wallet, color: AppColors.goldDark, size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'سحب رصيد من صاحب التعهد',
+                    style: GoogleFonts.cairo(fontSize: 15, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.goldLight,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'صاحب التعهد: ${project.ownerName.trim().isNotEmpty ? project.ownerName : project.clientName}',
+                          style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.deepNavy),
+                        ),
+                        Text(
+                          'المشروع: ${project.location}',
+                          style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'ملاحظة هامة: هذا المبلغ يضاف إلى سيولة المشروع (المسحوبات) ولا يلغي ديون العمال أو الموردين تلقائياً.',
+                          style: GoogleFonts.cairo(fontSize: 10, color: AppColors.goldDark, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: amountCtrl,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                    onChanged: (_) => setD(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'المبلغ المسحوب (ل.س) *',
+                      labelStyle: GoogleFonts.cairo(fontSize: 12),
+                      prefixIcon: const Icon(Icons.payments_outlined, size: 18),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  if (amt > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        'المبلغ بالإملاء: ${Money.withCurrency(amt, AppCurrency.syp)}',
+                        style: GoogleFonts.cairo(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.success),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: notesCtrl,
+                    decoration: InputDecoration(
+                      labelText: 'بيان / ملاحظات الدفعة',
+                      labelStyle: GoogleFonts.cairo(fontSize: 12),
+                      prefixIcon: const Icon(Icons.note_alt_outlined, size: 18),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  InkWell(
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: selectedDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2040),
+                      );
+                      if (picked != null) setD(() => selectedDate = picked);
+                    },
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: 'تاريخ الاستلام',
+                        labelStyle: GoogleFonts.cairo(fontSize: 12),
+                        prefixIcon: const Icon(Icons.calendar_today, size: 18),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: Text(
+                        selectedDate.toString().substring(0, 10),
+                        style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text('إلغاء', style: GoogleFonts.cairo()),
+              ),
+              ElevatedButton(
+                onPressed: amt <= 0
+                    ? null
+                    : () async {
+                        await FinanceEngine.drawOwnerFunds(
+                          project,
+                          amt,
+                          reason: notesCtrl.text,
+                          date: selectedDate,
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        setState(() {});
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'تم تسجيل سحب ${Money.withCurrency(amt, AppCurrency.syp)} من صاحب التعهد بنجاح',
+                                style: GoogleFonts.cairo(),
+                              ),
+                              backgroundColor: AppColors.success,
+                            ),
+                          );
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.gold),
+                child: Text(
+                  'تأكيد السحب',
+                  style: GoogleFonts.cairo(fontWeight: FontWeight.w800, color: Colors.white),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showOwnerDeficitAuditModal(BuildContext context, ProjectOwnerFinancials fin) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.85,
+        maxChildSize: 0.95,
+        minChildSize: 0.5,
+        builder: (ctx, scrollCtrl) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(4)),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Title & Owner info
+              Row(
+                children: [
+                  const Icon(Icons.assignment_outlined, color: AppColors.deepNavy, size: 22),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'كشف التدقيق المالي ومصروفات المشروع',
+                          style: GoogleFonts.cairo(fontSize: 15, fontWeight: FontWeight.w800),
+                        ),
+                        Text(
+                          'صاحب التعهد: ${fin.ownerName} • مشروع ${fin.projectLocation}',
+                          style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textSecondary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Summary banner
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: fin.isDeficit ? AppColors.errorBg : AppColors.successBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: fin.isDeficit ? AppColors.error.withOpacity(0.3) : AppColors.success.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'إجمالي المسحوبات: ${Money.withCurrency(fin.drawnFunds, AppCurrency.syp)}',
+                            style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textPrimary, fontWeight: FontWeight.w600),
+                          ),
+                          Text(
+                            'إجمالي المصروفات: ${Money.withCurrency(fin.disbursedExpenses, AppCurrency.syp)}',
+                            style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textPrimary, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          fin.isDeficit ? 'نقص الرصيد المطلوب' : 'الفائض الحقيقي',
+                          style: GoogleFonts.cairo(fontSize: 10, color: fin.isDeficit ? AppColors.error : AppColors.success, fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          fin.isDeficit
+                              ? '-${Money.withCurrency(fin.deficitAmount, AppCurrency.syp)}'
+                              : '+${Money.withCurrency(fin.surplusAmount, AppCurrency.syp)}',
+                          style: GoogleFonts.cairo(fontSize: 14, fontWeight: FontWeight.w900, color: fin.isDeficit ? AppColors.error : AppColors.success),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              Text(
+                'بيان الإجرائيات والمواد المسجلة على المشروع (${fin.auditItems.length})',
+                style: GoogleFonts.cairo(fontSize: 13, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+
+              // Itemized Audit List
+              Expanded(
+                child: fin.auditItems.isEmpty
+                    ? Center(
+                        child: Text(
+                          'لا توجد إجرائيات أو مصروفات مسجلة على هذا المشروع بعد.',
+                          style: GoogleFonts.cairo(color: AppColors.textSecondary, fontSize: 12),
+                        ),
+                      )
+                    : ListView.separated(
+                        controller: scrollCtrl,
+                        itemCount: fin.auditItems.length,
+                        separatorBuilder: (_, __) => const Divider(height: 12),
+                        itemBuilder: (_, i) {
+                          final item = fin.auditItems[i];
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: AppColors.goldLight,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  item.category,
+                                  style: GoogleFonts.cairo(fontSize: 10, fontWeight: FontWeight.w800, color: AppColors.goldDark),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.title,
+                                      style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w800),
+                                    ),
+                                    if (item.details != null && item.details!.isNotEmpty)
+                                      Text(
+                                        item.details!,
+                                        style: GoogleFonts.cairo(fontSize: 11, color: AppColors.textSecondary),
+                                      ),
+                                    Text(
+                                      item.date.toString().substring(0, 10),
+                                      style: GoogleFonts.cairo(fontSize: 10, color: AppColors.textSecondary),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                Money.withCurrency(item.amount, AppCurrency.syp),
+                                style: GoogleFonts.cairo(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.error),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+              ),
+
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _showDrawOwnerFundsModal(
+                      context,
+                      fin.project,
+                      initialAmount: fin.isDeficit ? fin.deficitAmount : null,
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.gold,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: const Icon(Icons.add_card, color: Colors.white),
+                  label: Text(
+                    fin.isDeficit ? 'سحب رصيد الآن لتغطية العجز (${Money.withCurrency(fin.deficitAmount, AppCurrency.syp)})' : 'سحب رصيد إضافي من صاحب التعهد',
+                    style: GoogleFonts.cairo(fontWeight: FontWeight.w800, color: Colors.white),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// Sprint 2026-09 Task 3.1: factory-only clients (no project link).

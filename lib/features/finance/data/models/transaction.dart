@@ -9,7 +9,14 @@ class TransactionTypeAdapter extends TypeAdapter<TransactionType> {
   @override void write(BinaryWriter w, TransactionType o)=> w.writeInt(o.index);
 }
 @HiveType(typeId: 10)
-enum TransactionParty { @HiveField(0) client, @HiveField(1) master, @HiveField(2) worker, @HiveField(3) supplier, @HiveField(4) driver }
+enum TransactionParty {
+  @HiveField(0) client,
+  @HiveField(1) master,
+  @HiveField(2) worker,
+  @HiveField(3) supplier,
+  @HiveField(4) driver,
+  @HiveField(5) owner,
+}
 class TransactionPartyAdapter extends TypeAdapter<TransactionParty> {
   @override final typeId=10;
   @override TransactionParty read(BinaryReader r) {

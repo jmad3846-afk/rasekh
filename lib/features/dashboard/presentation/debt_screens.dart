@@ -31,9 +31,10 @@ class _S extends ConsumerState<DebtBreakdownScreen> {
     ref.watch(transactionsProvider);
     final parties = widget.receivable
         ? {TransactionParty.client}
-        : {TransactionParty.supplier, TransactionParty.master, TransactionParty.worker, TransactionParty.driver};
+        : {TransactionParty.supplier};
     final txs = HiveInit.transactions.values
         .where((t) => parties.contains(t.party) && t.currency == filter)
+        .where((t) => t.projectId == null || t.projectId!.isEmpty)
         .toList();
     final Map<String, List<TransactionEntry>> grouped = {};
     for (final t in txs) {

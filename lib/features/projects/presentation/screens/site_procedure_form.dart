@@ -102,7 +102,25 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
     super.dispose();
   }
 
+  double get _consumedMatCost {
+    double sum = 0;
+    consumed.forEach((matId, qty) {
+      if (qty > 0) {
+        try {
+          final mat = HiveInit.requiredMaterials.get(matId);
+          if (mat != null && mat.unitPrice > 0) {
+            sum += qty * mat.unitPrice;
+          }
+        } catch (_) {}
+      }
+    });
+    return sum;
+  }
+
   double get _base {
+    if (widget.kind == SiteProcedureKind.cashExpense) {
+      return double.tryParse(workerWageC.text) ?? 0;
+    }
     if (widget.kind == SiteProcedureKind.worker) {
       return double.tryParse(workerWageC.text) ?? 0;
     }
@@ -111,13 +129,14 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
         : (double.tryParse(agreedC.text) ?? 0);
   }
 
-  double get _total => _base + (needVehicle ? (double.tryParse(driverWageC.text) ?? 0) : 0);
+  double get _total => _base + (needVehicle ? (double.tryParse(driverWageC.text) ?? 0) : 0) + _consumedMatCost;
 
   List<PersonnelEntry> _byRole(PersonnelRole r) =>
       HiveInit.personnel.values.where((e) => e.role == r).toList();
 
   @override
   Widget build(BuildContext context) {
+    final isCash = widget.kind == SiteProcedureKind.cashExpense;
     final isWorker = widget.kind == SiteProcedureKind.worker;
     final materials = HiveInit.requiredMaterials.values
         .where((m) => m.projectId == widget.project.id)
@@ -126,8 +145,8 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
       appBar: AppBar(
           title: Text(
               isEdit
-                  ? (isWorker ? 'تعديل إجرائية عامل' : 'تعديل إجرائية معلم')
-                  : (isWorker ? 'إجرائية عامل' : 'إجرائية معلم'),
+                  ? (isCash ? 'تعديل مصروف نقدي' : (isWorker ? 'تعديل إجرائية عامل' : 'تعديل إجرائية معلم'))
+                  : (isCash ? 'إضافة مصروف نقدي' : (isWorker ? 'إجرائية عامل' : 'إجرائية معلم')),
               style: GoogleFonts.cairo(fontWeight: FontWeight.w800))),
       body: Form(
         key: _form,
@@ -149,7 +168,40 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                 CurrencyBadge(widget.project.currency),
               ])),
           const SizedBox(height: 16),
-          if (isWorker) ...[
+          if (isCash) ...[
+            TextFormField(
+              controller: workerWageC,
+              decoration: const InputDecoration(
+                labelText: 'المبلغ / Amount *',
+                hintText: 'أدخل قيمة المصروف النقدي',
+                prefixIcon: Icon(Icons.attach_money),
+              ),
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+              onChanged: (_) => setState(() {}),
+              validator: (v) => v == null || v.trim().isEmpty ? 'مطلوب' : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: descC,
+              decoration: const InputDecoration(
+                labelText: 'السبب أو البيان / Reason or Description *',
+                hintText: 'مثال: رخصة بناء، مواصلات طارئة، شراء مستلزمات موقع...',
+                prefixIcon: Icon(Icons.description_outlined),
+              ),
+              maxLines: 2,
+              validator: (v) => v == null || v.trim().isEmpty ? 'مطلوب' : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: notesC,
+              decoration: const InputDecoration(
+                labelText: 'ملاحظات / Notes (اختياري)',
+                prefixIcon: Icon(Icons.note_alt_outlined),
+              ),
+              maxLines: 2,
+            ),
+          ] else if (isWorker) ...[
             Text('العامل *',
                 style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
@@ -237,14 +289,14 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                       hintText: 'مثال: 50 ألف للمتر')),
             ],
           ],
-          if (isWorker) ...[
+          if (!isCash && isWorker) ...[
             const SizedBox(height: 12),
             TextFormField(
                 controller: notesC,
                 decoration: const InputDecoration(
                     labelText: 'ملاحظات (وصف العمل المنجز)'),
                 maxLines: 2),
-          ] else if (contractType == MasterContractType.daily) ...[
+          ] else if (!isCash && contractType == MasterContractType.daily) ...[
             const SizedBox(height: 12),
             TextFormField(
                 controller: notesC,
@@ -252,90 +304,92 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                     const InputDecoration(labelText: 'ملاحظات'),
                 maxLines: 2),
           ],
-          const SizedBox(height: 16),
-          Text('المواد المستهلكة (تخصم من المواد اللازمة)',
-              style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          if (materials.isEmpty)
-            Text('لا توجد مواد لازمة — أضفها أولاً من زر المواد اللازمة.',
-                style: GoogleFonts.cairo(
-                    fontSize: 12, color: AppColors.textSecondary)),
-          for (final m in materials)
-            CheckboxListTile(
-              dense: true,
-              title: Text('${m.name} (متاح ${m.quantity.toStringAsFixed(1)} ${m.unit})',
-                  style: GoogleFonts.cairo(fontSize: 12)),
-              value: consumed.containsKey(m.id),
-              onChanged: (v) {
-                setState(() {
-                  if (v == true) {
-                    consumed[m.id] = 1;
-                  } else {
-                    consumed.remove(m.id);
-                  }
-                });
-              },
-              secondary: consumed.containsKey(m.id)
-                  ? SizedBox(
-                      width: 70,
-                      child: TextFormField(
-                        initialValue: consumed[m.id].toString(),
+          if (!isCash) ...[
+            const SizedBox(height: 16),
+            Text('المواد المستهلكة (تخصم من المواد اللازمة)',
+                style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            if (materials.isEmpty)
+              Text('لا توجد مواد لازمة — أضفها أولاً من زر المواد اللازمة.',
+                  style: GoogleFonts.cairo(
+                      fontSize: 12, color: AppColors.textSecondary)),
+            for (final m in materials)
+              CheckboxListTile(
+                dense: true,
+                title: Text('${m.name} (متاح ${m.quantity.toStringAsFixed(1)} ${m.unit})',
+                    style: GoogleFonts.cairo(fontSize: 12)),
+                value: consumed.containsKey(m.id),
+                onChanged: (v) {
+                  setState(() {
+                    if (v == true) {
+                      consumed[m.id] = 1;
+                    } else {
+                      consumed.remove(m.id);
+                    }
+                  });
+                },
+                secondary: consumed.containsKey(m.id)
+                    ? SizedBox(
+                        width: 70,
+                        child: TextFormField(
+                          initialValue: consumed[m.id].toString(),
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                          decoration: const InputDecoration(
+                              labelText: 'كمية', isDense: true),
+                          onChanged: (val) => consumed[m.id] =
+                              double.tryParse(val) ?? 0,
+                        ),
+                      )
+                    : null,
+              ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              title: Text('بحاجة سيارة؟ / Need Vehicle',
+                  style: GoogleFonts.cairo(
+                      fontSize: 13, fontWeight: FontWeight.w700)),
+              value: needVehicle,
+              activeThumbColor: AppColors.deepNavy,
+              onChanged: (v) => setState(() => needVehicle = v),
+            ),
+            if (needVehicle) ...[
+              DropdownButtonFormField<PersonnelEntry>(
+                value: driver,
+                decoration: const InputDecoration(
+                    labelText: 'اختر السائق (من العاملين) *'),
+                items: _byRole(PersonnelRole.driver)
+                    .map((p) => DropdownMenuItem(
+                        value: p,
+                        child: Text(
+                            '${p.name} • ${p.extra} • ${p.phone}',
+                            style: GoogleFonts.cairo(fontSize: 13))))
+                    .toList(),
+                onChanged: (v) => setState(() => driver = v),
+                validator: (v) =>
+                    (needVehicle && v == null) ? 'اختر السائق' : null,
+              ),
+              const SizedBox(height: 8),
+              Row(children: [
+                Expanded(
+                    child: TextFormField(
+                        controller: driverWageC,
+                        decoration: const InputDecoration(
+                            labelText: 'أجرة السائق *'),
                         keyboardType: TextInputType.number,
                         inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                        onChanged: (_) => setState(() {}),
+                        validator: (v) =>
+                            (needVehicle && (v == null || v.isEmpty))
+                                ? 'مطلوب'
+                                : null)),
+                const SizedBox(width: 8),
+                Expanded(
+                    child: TextFormField(
+                        controller: transportNotesC,
                         decoration: const InputDecoration(
-                            labelText: 'كمية', isDense: true),
-                        onChanged: (val) => consumed[m.id] =
-                            double.tryParse(val) ?? 0,
-                      ),
-                    )
-                  : null,
-            ),
-          const SizedBox(height: 12),
-          SwitchListTile(
-            title: Text('بحاجة سيارة؟ / Need Vehicle',
-                style: GoogleFonts.cairo(
-                    fontSize: 13, fontWeight: FontWeight.w700)),
-            value: needVehicle,
-            activeThumbColor: AppColors.deepNavy,
-            onChanged: (v) => setState(() => needVehicle = v),
-          ),
-          if (needVehicle) ...[
-            DropdownButtonFormField<PersonnelEntry>(
-              value: driver,
-              decoration: const InputDecoration(
-                  labelText: 'اختر السائق (من العاملين) *'),
-              items: _byRole(PersonnelRole.driver)
-                  .map((p) => DropdownMenuItem(
-                      value: p,
-                      child: Text(
-                          '${p.name} • ${p.extra} • ${p.phone}',
-                          style: GoogleFonts.cairo(fontSize: 13))))
-                  .toList(),
-              onChanged: (v) => setState(() => driver = v),
-              validator: (v) =>
-                  (needVehicle && v == null) ? 'اختر السائق' : null,
-            ),
-            const SizedBox(height: 8),
-            Row(children: [
-              Expanded(
-                  child: TextFormField(
-                      controller: driverWageC,
-                      decoration: const InputDecoration(
-                          labelText: 'أجرة السائق *'),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-                      onChanged: (_) => setState(() {}),
-                      validator: (v) =>
-                          (needVehicle && (v == null || v.isEmpty))
-                              ? 'مطلوب'
-                              : null)),
-              const SizedBox(width: 8),
-              Expanded(
-                  child: TextFormField(
-                      controller: transportNotesC,
-                      decoration: const InputDecoration(
-                          labelText: 'ملاحظات النقل'))),
-            ]),
+                            labelText: 'ملاحظات النقل'))),
+              ]),
+            ],
           ],
           const SizedBox(height: 12),
           Container(
@@ -346,7 +400,7 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
               child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('إجمالي الإجرائية',
+                    Text('إجمالي المصروف',
                         style: GoogleFonts.cairo(
                             color: Colors.white70, fontSize: 12)),
                     Text(
@@ -358,9 +412,11 @@ class _S extends ConsumerState<SiteProcedureFormScreen> {
                             fontSize: 15)),
                   ])),
           Text(
-              isWorker
-                  ? 'المعادلة: أجرة العامل + أجرة السائق'
-                  : 'المعادلة: الأجرة/المقطوع + أجرة السائق',
+              isCash
+                  ? 'مصروف نقدي مباشر يضاف إلى مصروفات صاحب التعهد.'
+                  : isWorker
+                      ? 'المعادلة الكلية: أجرة العامل + أجرة السائق (إن وُجد) + تكلفة المواد المستهلكة (إن وُجدت)'
+                      : 'المعادلة الكلية: الأجرة/المقطوع + أجرة السائق (إن وُجد) + تكلفة المواد المستهلكة (إن وُجدت)',
               style: GoogleFonts.cairo(
                   fontSize: 11, color: AppColors.textSecondary)),
           const SizedBox(height: 16),

@@ -17,8 +17,268 @@ import '../../projects/data/models/site_materials.dart';
 ///   so double-taps / rebuilds / re-saves can never triple amounts.
 /// - Each party is posted EXACTLY once per procedure/invoice.
 /// - Reversals delete original entries (no dangling master/worker/supplier credits).
+class ProjectAuditItem {
+  final String id;
+  final String title;
+  final String category; // 'إجرائية ورشة' | 'إجرائية موقع' | 'مواد لازمة' | 'مصروف نقدي'
+  final DateTime date;
+  final double amount;
+  final String? details;
+  final String? supplierName;
+
+  ProjectAuditItem({
+    required this.id,
+    required this.title,
+    required this.category,
+    required this.date,
+    required this.amount,
+    this.details,
+    this.supplierName,
+  });
+}
+
+class ProjectOwnerFinancials {
+  final Project project;
+  final String ownerName;
+  final String ownerPhone;
+  final String projectLocation;
+  final double drawnFunds;
+  final double disbursedExpenses;
+  final List<ProjectAuditItem> auditItems;
+
+  ProjectOwnerFinancials({
+    required this.project,
+    required this.ownerName,
+    required this.ownerPhone,
+    required this.projectLocation,
+    required this.drawnFunds,
+    required this.disbursedExpenses,
+    required this.auditItems,
+  });
+
+  double get netBalance => drawnFunds - disbursedExpenses;
+  bool get isSurplus => netBalance >= 0;
+  bool get isDeficit => netBalance < 0;
+  double get deficitAmount => netBalance < 0 ? netBalance.abs() : 0.0;
+  double get surplusAmount => netBalance > 0 ? netBalance : 0.0;
+}
+
 class FinanceEngine {
   static Box<TransactionEntry> get _box => HiveInit.transactions;
+
+  static String projectOwnerPartyId(Project project) {
+    return project.ownerPhone.trim().isEmpty ? 'owner-${project.id}' : project.ownerPhone.trim();
+  }
+
+  static Future<void> ensureProjectOwnerRecord(Project project) async {
+    final partyId = projectOwnerPartyId(project);
+    final existing = _box.values.where((e) =>
+        e.projectId == project.id &&
+        e.party == TransactionParty.owner &&
+        e.partyId == partyId).toList();
+    if (existing.isNotEmpty) {
+      return;
+    }
+    await _add(TransactionEntry(
+      partyId: partyId,
+      partyName: project.ownerName.trim().isEmpty ? project.clientName : project.ownerName,
+      partyPhone: project.ownerPhone.trim().isEmpty ? project.clientPhone : project.ownerPhone,
+      party: TransactionParty.owner,
+      type: TransactionType.credit,
+      amount: 0,
+      source: 'Project Owner Anchor ${project.id}',
+      reason: 'صاحب التعهد • ${project.location}',
+      projectId: project.id,
+      currency: project.currency,
+    ));
+  }
+
+  static Future<void> drawOwnerFunds(
+    Project project,
+    double amount, {
+    String? reason,
+    DateTime? date,
+  }) async {
+    if (amount <= 0.005) return;
+    final partyId = projectOwnerPartyId(project);
+    await _add(TransactionEntry(
+      partyId: partyId,
+      partyName: project.ownerName.trim().isEmpty ? project.clientName : project.ownerName,
+      partyPhone: project.ownerPhone.trim().isEmpty ? project.clientPhone : project.ownerPhone,
+      party: TransactionParty.owner,
+      type: TransactionType.credit,
+      amount: amount,
+      source: 'سحب رصيد من صاحب التعهد - ${project.location}',
+      reason: reason != null && reason.trim().isNotEmpty
+          ? reason.trim()
+          : 'سحب رصيد نقدي لصالح خزانة المشروع',
+      projectId: project.id,
+      currency: project.currency,
+      createdAt: date,
+    ));
+  }
+
+  static Future<void> recordOwnerExpense(Project project, double amount, {required String source, required String reason, String? relatedId}) async {
+    if (amount <= 0.005) return;
+    final partyId = projectOwnerPartyId(project);
+    await _add(TransactionEntry(
+      partyId: partyId,
+      partyName: project.ownerName.trim().isEmpty ? project.clientName : project.ownerName,
+      partyPhone: project.ownerPhone.trim().isEmpty ? project.clientPhone : project.ownerPhone,
+      party: TransactionParty.owner,
+      type: TransactionType.payment,
+      amount: amount,
+      source: source,
+      reason: reason,
+      relatedId: relatedId,
+      projectId: project.id,
+      currency: project.currency,
+    ));
+  }
+
+  static ProjectOwnerFinancials getProjectOwnerFinancials(Project project) {
+    double drawnFunds = 0;
+    for (final t in _box.values) {
+      if (t.projectId == project.id && t.party == TransactionParty.owner && t.type == TransactionType.credit) {
+        drawnFunds += t.amount;
+      }
+    }
+
+    final auditItems = <ProjectAuditItem>[];
+
+    // Workshop procedures
+    try {
+      final procedures = HiveInit.procedures.values
+          .where((p) => p.projectId == project.id && p.status == ProcedureStatus.completed);
+      for (final p in procedures) {
+        final detailsList = <String>[];
+        if (p.masterWage > 0) detailsList.add('أجرة معلم (${p.masterName}): ${p.masterWage}');
+        if (p.workers.isNotEmpty) {
+          final wSum = p.workers.fold(0.0, (s, w) => s + w.cost);
+          detailsList.add('أجور عمال (${p.workers.length}): $wSum');
+        }
+        if (p.supplier.totalCost > 0) {
+          detailsList.add('تكلفة مواد (${p.supplier.name}): ${p.supplier.totalCost}');
+        }
+        auditItems.add(ProjectAuditItem(
+          id: p.id,
+          title: p.title,
+          category: 'إجرائية ورشة',
+          date: p.date,
+          amount: p.totalCost,
+          details: detailsList.isEmpty ? null : detailsList.join(' • '),
+          supplierName: p.supplier.name.isNotEmpty ? p.supplier.name : null,
+        ));
+      }
+    } catch (_) {}
+
+    // Site procedures
+    try {
+      final siteProcs = HiveInit.siteProcedures.values
+          .where((p) => p.projectId == project.id);
+      for (final sp in siteProcs) {
+        if (sp.kind == SiteProcedureKind.cashExpense) {
+          auditItems.add(ProjectAuditItem(
+            id: sp.id,
+            title: sp.description.isNotEmpty ? sp.description : 'مصروف نقدي',
+            category: 'مصروف نقدي',
+            date: sp.date,
+            amount: sp.totalCost,
+            details: sp.notes.isNotEmpty ? sp.notes : null,
+          ));
+          continue;
+        }
+        final detailsList = <String>[];
+        if (sp.kind == SiteProcedureKind.worker && sp.workerWage > 0) {
+          detailsList.add('أجرة عامل (${sp.workerName}): ${sp.workerWage}');
+        }
+        if (sp.kind == SiteProcedureKind.master && sp.baseWage > 0) {
+          detailsList.add('أجرة معلم (${sp.masterName}): ${sp.baseWage}');
+        }
+        if (sp.needVehicle && sp.driverWage > 0) {
+          detailsList.add('أجرة نقل (${sp.driverName.isEmpty ? "سائق" : sp.driverName}): ${sp.driverWage}');
+        }
+        auditItems.add(ProjectAuditItem(
+          id: sp.id,
+          title: sp.description.isNotEmpty ? sp.description : (sp.personName.isNotEmpty ? sp.personName : 'إجرائية موقع'),
+          category: 'إجرائية موقع',
+          date: sp.date,
+          amount: sp.totalCost,
+          details: detailsList.isEmpty ? null : detailsList.join(' • '),
+        ));
+      }
+    } catch (_) {}
+
+    // Required Materials
+    try {
+      final materials = HiveInit.requiredMaterials.values
+          .where((m) => m.projectId == project.id);
+      for (final m in materials) {
+        if (m.totalValue <= 0) continue;
+        auditItems.add(ProjectAuditItem(
+          id: m.id,
+          title: '${m.name} (${m.quantity} ${m.unit})',
+          category: 'مواد لازمة',
+          date: m.createdAt,
+          amount: m.totalValue,
+          details: 'مورد: ${m.supplierName.isEmpty ? "غير محدد" : m.supplierName}${m.downPayment > 0 ? " • دفعة أولى: ${m.downPayment}" : ""}',
+          supplierName: m.supplierName.isNotEmpty ? m.supplierName : null,
+        ));
+      }
+    } catch (_) {}
+
+    // Manual direct owner expense transactions (if any)
+    for (final t in _box.values) {
+      if (t.projectId == project.id && t.party == TransactionParty.owner && t.type == TransactionType.payment) {
+        final alreadyInAudit = auditItems.any((item) => item.id == t.relatedId);
+        if (!alreadyInAudit) {
+          auditItems.add(ProjectAuditItem(
+            id: t.id,
+            title: t.reason.isNotEmpty ? t.reason : t.source,
+            category: 'مصروف نقدي',
+            date: t.createdAt,
+            amount: t.amount,
+            details: t.source,
+          ));
+        }
+      }
+    }
+
+    auditItems.sort((a, b) => b.date.compareTo(a.date));
+
+    final disbursedExpenses = auditItems.fold(0.0, (s, item) => s + item.amount);
+
+    return ProjectOwnerFinancials(
+      project: project,
+      ownerName: project.ownerName.trim().isNotEmpty ? project.ownerName : project.clientName,
+      ownerPhone: project.ownerPhone.trim().isNotEmpty ? project.ownerPhone : project.clientPhone,
+      projectLocation: project.location,
+      drawnFunds: drawnFunds,
+      disbursedExpenses: disbursedExpenses,
+      auditItems: auditItems,
+    );
+  }
+
+  static double projectOwnerFloatingBalance(Project project) {
+    return getProjectOwnerFinancials(project).netBalance;
+  }
+
+  static double projectOwnerFloatingBalanceFor(String projectId) {
+    final pr = HiveInit.projects.get(projectId);
+    if (pr != null) return getProjectOwnerFinancials(pr).netBalance;
+    return 0.0;
+  }
+
+  static List<TransactionEntry> projectOwnerDeficitAudit(Project project) {
+    return projectOwnerDeficitAuditFor(project.id);
+  }
+
+  static List<TransactionEntry> projectOwnerDeficitAuditFor(String projectId) {
+    return _box.values
+        .where((t) => t.projectId == projectId && t.party == TransactionParty.owner && t.type == TransactionType.payment)
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
 
   /// Delete ALL ledger rows linked to [relatedId] (procedureId / invoiceId).
   static Future<void> clearRelatedTransactions(String relatedId) async {
@@ -77,8 +337,7 @@ class FinanceEngine {
     await project.save();
     if (p.status == ProcedureStatus.completed) {
       await _postCompletedProcedure(p, project);
-    }
-  }
+    }    await recordOwnerExpense(project, p.totalCost, source: 'Procedure ${p.title}', reason: 'نفقات اجراء ${p.title}');  }
 
   static Future<void> onProcedureStatusChanged(
       Procedure p, Project project, ProcedureStatus oldStatus) async {
@@ -280,6 +539,16 @@ class FinanceEngine {
   static Future<void> _add(TransactionEntry t) async =>
       await _box.put(t.id, t);
 
+  /// Required for the stock-management search UI.
+  static bool matchesStockLogQuery(StockLog log, String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return log.productName.toLowerCase().contains(q)
+        || log.supplierName.toLowerCase().contains(q)
+        || log.supplierPhone.toLowerCase().contains(q)
+        || log.suppliedMaterials.toLowerCase().contains(q);
+  }
+
   // ── Site procedures (Req #11) ───────────────────────────────
   /// Posts a site procedure: client debit + worker/master credit + driver credit.
   /// Idempotent via [clearRelatedTransactions].
@@ -299,6 +568,19 @@ class FinanceEngine {
       source: base, reason: 'تكلفة إجرائية موقع',
       relatedId: p.id, projectId: project.id, currency: cur,
     ));
+    if (p.kind == SiteProcedureKind.cashExpense) {
+      final base = 'مصروف نقدي ${p.description} - ${project.location}';
+      final cur = p.currency;
+      await _add(TransactionEntry(
+        partyId: project.clientId, partyName: project.clientName,
+        partyPhone: project.clientPhone, party: TransactionParty.client,
+        type: TransactionType.debit, amount: p.totalCost,
+        source: base, reason: 'مصروف نقدي',
+        relatedId: p.id, projectId: project.id, currency: cur,
+      ));
+      await recordOwnerExpense(project, p.totalCost, source: base, reason: p.description.isNotEmpty ? p.description : 'مصروف نقدي', relatedId: p.id);
+      return;
+    }
     if (p.kind == SiteProcedureKind.worker) {
       await _add(TransactionEntry(
         partyId: p.workerId.isEmpty ? 'worker-${p.id}' : p.workerId,
@@ -327,6 +609,7 @@ class FinanceEngine {
         relatedId: p.id, projectId: project.id, currency: cur,
       ));
     }
+    await recordOwnerExpense(project, p.totalCost, source: base, reason: 'تكلفة إجرائية موقع: ${p.description.isEmpty ? p.personName : p.description}', relatedId: p.id);
   }
 
   static Future<void> onSiteProcedureDeleted(SiteProcedure p, Project project) async {
@@ -357,6 +640,17 @@ class FinanceEngine {
     final base =
         'يومية ${updated.description.isEmpty ? updated.personName : updated.description} - ${project.location}';
     final cur = updated.currency;
+    if (updated.kind == SiteProcedureKind.cashExpense) {
+      await _add(TransactionEntry(
+        partyId: project.clientId, partyName: project.clientName,
+        partyPhone: project.clientPhone, party: TransactionParty.client,
+        type: TransactionType.debit, amount: updated.totalCost,
+        source: base, reason: 'مصروف نقدي',
+        relatedId: updated.id, projectId: project.id, currency: cur,
+      ));
+      await recordOwnerExpense(project, updated.totalCost, source: base, reason: updated.description.isNotEmpty ? updated.description : 'مصروف نقدي', relatedId: updated.id);
+      return;
+    }
     await _add(TransactionEntry(
       partyId: project.clientId, partyName: project.clientName,
       partyPhone: project.clientPhone, party: TransactionParty.client,
@@ -392,6 +686,7 @@ class FinanceEngine {
         relatedId: updated.id, projectId: project.id, currency: cur,
       ));
     }
+    await recordOwnerExpense(project, updated.totalCost, source: base, reason: 'تكلفة إجرائية موقع: ${updated.description.isEmpty ? updated.personName : updated.description}', relatedId: updated.id);
   }
 
   // ── Required materials dual finance (Task 3) ──────────────
@@ -450,6 +745,7 @@ class FinanceEngine {
         currency: cur,
       ));
     }
+    await recordOwnerExpense(project, total, source: base, reason: 'تكلفة المواد اللازمة ${m.name}', relatedId: m.id);
   }
 
   static Future<void> onRequiredMaterialUpdated(
@@ -495,12 +791,34 @@ class FinanceEngine {
     return list;
   }
 
-  /// Unified timeline for a person across ALL parties (factory + projects).
+  /// Unified timeline for a person across factory + project personnel parties.
   /// Matches by name, phone, or id (case-insensitive).
+  ///
+  /// STRICT EXCLUSION — Project Owners (أصحاب التعهدات) must NEVER appear:
+  ///
+  ///   Rule 1 — Direct block: any entry with party == owner is skipped.
+  ///
+  ///   Rule 2 — Indirect block: project owners also appear as "client" rows
+  ///   (procedure/material debits) because the owner IS the project client.
+  ///   These rows always carry a non-null projectId.  Factory invoice rows
+  ///   (the only legitimate "client" rows) have projectId == null.
+  ///   Therefore client rows where projectId != null are also excluded.
+  ///
+  /// Allowed parties in search results:
+  ///   • client  (projectId == null) — Factory Clients (عملاء المعمل والفواتير)
+  ///   • supplier — Inventory/Project Suppliers (موردو المخزون والتعهدات)
+  ///   • worker   — Project Workers (عمال التعهدات)
+  ///   • master   — Project Masters (معلمو التعهدات)
+  ///   • driver   — Project Drivers (سائقو التعهدات)
   static List<TransactionEntry> timelineForPerson(String query) {
     final q = query.trim().toLowerCase();
     if (q.isEmpty) return [];
     final list = _box.values.where((e) {
+      // Rule 1 — direct block: owner party is never searchable.
+      if (e.party == TransactionParty.owner) return false;
+      // Rule 2 — indirect block: project-linked client rows belong to the
+      // project owner acting as debtor, not to a factory client.
+      if (e.party == TransactionParty.client && e.projectId != null) return false;
       return e.partyName.toLowerCase().contains(q) ||
           (e.partyPhone ?? '').toLowerCase().contains(q) ||
           e.partyId.toLowerCase().contains(q);
@@ -517,6 +835,29 @@ class FinanceEngine {
       if (t.type == TransactionType.debit) sum += t.amount;
       if (t.type == TransactionType.credit ||
           t.type == TransactionType.payment) sum -= t.amount;
+    }
+    return sum;
+  }
+
+  /// Strict factory-only receivable KPI: unpaid client invoice debt,
+  /// excluding any project-linked client debit rows.
+  static double factoryReceivableDebt({AppCurrency? currency}) {
+    double sum = 0;
+    for (final t in factoryClientLedger()) {
+      if (currency != null && t.currency != currency) continue;
+      if (t.type == TransactionType.debit) sum += t.amount;
+      if (t.type == TransactionType.credit || t.type == TransactionType.payment) sum -= t.amount;
+    }
+    return sum;
+  }
+
+  /// Strict factory-only payable KPI: inventory supplier debt from restock.
+  static double factoryPayableDebt({AppCurrency? currency}) {
+    double sum = 0;
+    for (final t in inventorySupplierLedger()) {
+      if (currency != null && t.currency != currency) continue;
+      if (t.type == TransactionType.credit) sum += t.amount;
+      if (t.type == TransactionType.payment) sum -= t.amount;
     }
     return sum;
   }

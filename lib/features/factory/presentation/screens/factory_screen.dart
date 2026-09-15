@@ -10,6 +10,7 @@ import '../../../../core/theme/finance_widgets.dart';
 import '../../logic/factory_providers.dart';
 import '../../data/models/product.dart';
 import '../../data/models/invoice.dart';
+import '../../data/models/stock_log.dart';
 import '../../../finance/logic/finance_engine.dart';
 import '../../../finance/presentation/screens/ledger_screen.dart';
 import 'product_form.dart';
@@ -70,7 +71,7 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
         // STOCK MANAGEMENT LOGS TAB (Task 5) — right next to Invoices.
         stockAsync.when(
           data:(logs)=> Column(children:[
-            _searchBar(_stockSearchCtrl, 'بحث باسم المنتج...', (v)=> setState(()=> stockQuery = v)),
+            _searchBar(_stockSearchCtrl, 'بحث باسم الشخص/المورد...', (v)=> setState(()=> stockQuery = v)),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: Row(children:[
@@ -158,10 +159,23 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
   }
 
   List<dynamic> _filteredStockLogs(List<dynamic> all) {
-    final q = stockQuery.trim().toLowerCase();
     return all.where((l) {
-      final name = (l.productName as String).toLowerCase();
-      final matchesQ = q.isEmpty || name.contains(q);
+      final query = stockQuery.trim().toLowerCase();
+      final matchesQ = FinanceEngine.matchesStockLogQuery(
+        StockLog(
+          productId: (l.productId as String?) ?? '',
+          productName: (l.productName as String?) ?? '',
+          quantityAdded: (l.quantityAdded as double?) ?? 0,
+          purchaseCost: (l.purchaseCost as double?) ?? 0,
+          supplierName: (l.supplierName as String?) ?? '',
+          supplierPhone: (l.supplierPhone as String?) ?? '',
+          suppliedMaterials: (l.suppliedMaterials as String?) ?? '',
+          notes: (l.notes as String?) ?? '',
+          createdAt: l.createdAt as DateTime,
+          downPayment: (l.downPayment as double?) ?? 0,
+        ),
+        query,
+      );
       final matchesDate = stockDateFilter == null ||
           (l.createdAt.year == stockDateFilter!.year &&
               l.createdAt.month == stockDateFilter!.month &&
@@ -380,12 +394,14 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
                       InkWell(
                         onTap: () {
                           supplierC.text = m.value.name;
-                          phoneC.text = m.value.phone == m.key
+                          phoneC.text = m.value.phone.trim().isEmpty
                               ? ''
                               : m.value.phone;
-                          materialsC.text =
-                              m.value.suppliedMaterials;
+                          materialsC.text = m.value.suppliedMaterials;
                           setD(() => autoFilled = true);
+                          // Force immediate UI refresh in the dialog state so the
+                          // phone field displays the selected supplier's number.
+                          setState(() {});
                         },
                         child: Padding(
                           padding: const EdgeInsets.symmetric(

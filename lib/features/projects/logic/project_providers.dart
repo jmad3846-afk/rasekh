@@ -7,8 +7,14 @@ import '../../finance/logic/finance_engine.dart';
 final projectsProvider = StreamProvider<List<Project>>((ref) async* { final box=HiveInit.projects; yield box.values.toList()..sort((a,b)=> b.createdAt.compareTo(a.createdAt)); yield* box.watch().map((_)=> box.values.toList()..sort((a,b)=> b.createdAt.compareTo(a.createdAt))); });
 final proceduresProvider = StreamProvider.family<List<Procedure>,String>((ref,projectId) async* { final box=HiveInit.procedures; List<Procedure> getList()=> box.values.where((p)=> p.projectId==projectId).toList()..sort((a,b)=> b.date.compareTo(a.date)); yield getList(); yield* box.watch().map((_)=> getList()); });
 class ProjectService {
-  Future<void> add(Project p) async => await HiveInit.projects.put(p.id,p);
-  Future<void> update(Project p) async => await p.save();
+  Future<void> add(Project p) async {
+    await HiveInit.projects.put(p.id, p);
+    await FinanceEngine.ensureProjectOwnerRecord(p);
+  }
+  Future<void> update(Project p) async {
+    await p.save();
+    await FinanceEngine.ensureProjectOwnerRecord(p);
+  }
   Future<void> delete(Project p) async {
     final procs=HiveInit.procedures.values.where((e)=> e.projectId==p.id).toList();
     for(final pr in procs) {
