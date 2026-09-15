@@ -186,10 +186,17 @@ class LicenseService {
     }
     final expiry = DateTime.tryParse(expiryStr);
     if (expiry == null) return LicenseStatus.invalid;
+    // Strict: valid until last second of expiry day (23:59:59 local).
     final expiryEnd = DateTime(expiry.year, expiry.month, expiry.day, 23, 59, 59);
     if (DateTime.now().isAfter(expiryEnd)) return LicenseStatus.expired;
 
     return LicenseStatus.valid;
+  }
+
+  /// Strict boolean gate used on resume/timer: true only if still licensed
+  /// at this exact second (expiry parsed to 23:59:59, compared to now).
+  Future<bool> isAppLicensed() async {
+    return (await checkLicenseStatus()) == LicenseStatus.valid;
   }
 
   Future<DateTime?> getExpiryDate() async {

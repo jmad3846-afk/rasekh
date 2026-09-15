@@ -1,5 +1,6 @@
 import 'package:hive/hive.dart';
 import 'package:uuid/uuid.dart';
+import '../../../../core/utils/currency.dart';
 
 @HiveType(typeId: 8)
 enum ProcedureStatus { @HiveField(0) pending, @HiveField(1) completed }
@@ -56,12 +57,14 @@ class Procedure extends HiveObject {
   @HiveField(9) List<WorkshopWorker> workers;
   @HiveField(10) SupplierInfo supplier;
   @HiveField(11) double totalCost; // computed
+  @HiveField(12) AppCurrency currency;
 
   Procedure({
     String? id, required this.projectId, required this.title, required this.description,
     this.status=ProcedureStatus.pending, DateTime? date,
     required this.masterName, required this.masterPhone, required this.masterWage,
     List<WorkshopWorker>? workers, required this.supplier,
+    this.currency = AppCurrency.syp,
   }) : id=id??const Uuid().v4(), date=date??DateTime.now(), workers=workers??[],
        totalCost = masterWage + (workers??[]).fold(0.0,(s,w)=>s+w.cost) + supplier.totalCost;
 
@@ -70,14 +73,16 @@ class Procedure extends HiveObject {
   Map<String,dynamic> toJson()=> {
     'id':id,'projectId':projectId,'title':title,'description':description,'status':status.index,'date':date.toIso8601String(),
     'masterName':masterName,'masterPhone':masterPhone,'masterWage':masterWage,
-    'workers':workers.map((w)=>w.toJson()).toList(),'supplier':supplier.toJson(),'totalCost':totalCost
+    'workers':workers.map((w)=>w.toJson()).toList(),'supplier':supplier.toJson(),'totalCost':totalCost,
+    'currency':currency.code
   };
   factory Procedure.fromJson(Map<String,dynamic> j)=> Procedure(
     id:j['id'],projectId:j['projectId'],title:j['title'],description:j['description'],
     status:ProcedureStatus.values[j['status']],date:DateTime.parse(j['date']),
     masterName:j['masterName'],masterPhone:j['masterPhone'],masterWage:(j['masterWage'] as num).toDouble(),
-    workers:(j['workers'] as List).map((e)=>WorkshopWorker.fromJson(e)).toList(),
-    supplier:SupplierInfo.fromJson(j['supplier'])
+    workers:(j['workers'] as List).map((e)=>WorkshopWorker.fromJson(Map<String,dynamic>.from(e as Map))).toList(),
+    supplier:SupplierInfo.fromJson(Map<String,dynamic>.from(j['supplier'] as Map)),
+    currency: AppCurrencyX.fromString(j['currency'] as String?),
   );
 }
 
@@ -89,12 +94,19 @@ class ProcedureAdapter extends TypeAdapter<Procedure> {
     final masterName=r.readString(); final masterPhone=r.readString(); final masterWage=r.readDouble();
     final workers=(r.readList() as List).cast<WorkshopWorker>(); final supplier=r.read() as SupplierInfo;
     final p=Procedure(id:id,projectId:projectId,title:title,description:desc,status:status,date:date,masterName:masterName,masterPhone:masterPhone,masterWage:masterWage,workers:workers,supplier:supplier);
-    p.totalCost=r.readDouble(); return p;
+    p.totalCost=r.readDouble();
+    try {
+      p.currency = AppCurrency.values[r.readInt()];
+    } catch (_) {
+      p.currency = AppCurrency.syp;
+    }
+    return p;
   }
   @override void write(BinaryWriter w, Procedure o){
     w.writeString(o.id);w.writeString(o.projectId);w.writeString(o.title);w.writeString(o.description);
     w.writeInt(o.status.index);w.writeInt(o.date.millisecondsSinceEpoch);
     w.writeString(o.masterName);w.writeString(o.masterPhone);w.writeDouble(o.masterWage);
     w.writeList(o.workers);w.write(o.supplier);w.writeDouble(o.totalCost);
+    w.writeInt(o.currency.index);
   }
 }

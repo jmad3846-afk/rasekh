@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/licensing/license_provider.dart';
@@ -6,32 +7,49 @@ import '../../../app.dart';
 import 'activation_screen.dart';
 import 'time_lock_screen.dart';
 
-/// Root Navigation Guard — wrap MaterialApp home with this
+/// Root Navigation Guard — wrap MaterialApp home with this.
+/// Enforces strict expiry: 23:59:59 comparison + resume + periodic re-check.
 class LicenseGate extends ConsumerStatefulWidget {
   const LicenseGate({super.key});
   @override ConsumerState<LicenseGate> createState() => _S();
 }
 
 class _S extends ConsumerState<LicenseGate> with WidgetsBindingObserver {
+  Timer? _timer;
+
   @override void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Periodic enforcement: if expiry passes while app is open, block instantly.
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!mounted) return;
+      final licensed = await ref.read(licenseServiceProvider).isAppLicensed();
+      if (!licensed) {
+        ref.invalidate(licenseStatusProvider);
+      }
+    });
   }
 
   @override void dispose() {
+    _timer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Re-check time tampering on resume
-      ref.read(licenseServiceProvider).onAppResume().then((tampered) {
+      // Immediately validate on foreground: tamper + strict expiry.
+      ref.read(licenseServiceProvider).onAppResume().then((tampered) async {
+        if (!mounted) return;
         if (tampered) {
           ref.invalidate(licenseStatusProvider);
         } else {
-          // Also refresh status in case license expired while paused
-          ref.invalidate(licenseStatusProvider);
+          // Also refresh status in case license expired while paused.
+          final licensed =
+              await ref.read(licenseServiceProvider).isAppLicensed();
+          if (!licensed || mounted) {
+            ref.invalidate(licenseStatusProvider);
+          }
         }
       });
     }

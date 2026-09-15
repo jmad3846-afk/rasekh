@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/widgets.dart';
+import '../../../../core/utils/currency.dart';
 import '../../../../core/utils/money.dart';
 import '../../logic/factory_providers.dart';
 import '../../data/models/product.dart';
+import '../../data/models/invoice.dart';
 import 'product_form.dart';
 import 'invoice_form.dart';
 
@@ -15,7 +17,14 @@ class FactoryScreen extends ConsumerStatefulWidget {
 }
 class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderStateMixin {
   late TabController _tab;
-  @override void initState(){ super.initState(); _tab=TabController(length:2, vsync:this); }
+  String productQuery = '';
+  String invoiceQuery = '';
+  final _productSearchCtrl = TextEditingController();
+  final _invoiceSearchCtrl = TextEditingController();
+
+  @override void initState(){ super.initState(); _tab=TabController(length:2, vsync:this); _tab.addListener(()=> setState((){})); }
+  @override void dispose(){ _tab.dispose(); _productSearchCtrl.dispose(); _invoiceSearchCtrl.dispose(); super.dispose(); }
+
   @override Widget build(BuildContext context){
     final productsAsync = ref.watch(productsProvider);
     final invoicesAsync = ref.watch(invoicesProvider);
@@ -28,14 +37,20 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
         ]),
       ),
       body: TabBarView(controller:_tab, children:[
-        // PRODUCTS TAB
+        // PRODUCTS TAB with inline search
         productsAsync.when(
-          data:(products)=> _productsList(products),
+          data:(products)=> Column(children:[
+            _searchBar(_productSearchCtrl, 'بحث بالاسم أو الفئة...', (v)=> setState(()=> productQuery = v)),
+            Expanded(child: _productsList(_filteredProducts(products))),
+          ]),
           loading: ()=> const Center(child: CircularProgressIndicator()),
           error:(e,s)=> Center(child: Text('$e')),
         ),
         invoicesAsync.when(
-          data:(invoices)=> _invoicesList(invoices),
+          data:(invoices)=> Column(children:[
+            _searchBar(_invoiceSearchCtrl, 'بحث باسم الزبون أو الهاتف...', (v)=> setState(()=> invoiceQuery = v)),
+            Expanded(child: _invoicesList(_filteredInvoices(invoices))),
+          ]),
           loading: ()=> const Center(child: CircularProgressIndicator()),
           error:(e,s)=> Center(child: Text('$e')),
         ),
@@ -50,8 +65,41 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
     );
   }
 
+  Widget _searchBar(TextEditingController ctrl, String hint, ValueChanged<String> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16,12,16,4),
+      child: TextField(
+        controller: ctrl,
+        onChanged: onChanged,
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: GoogleFonts.cairo(fontSize:12, color: AppColors.textSecondary),
+          prefixIcon: const Icon(Icons.search, size:20),
+          suffixIcon: ctrl.text.isNotEmpty ? IconButton(icon: const Icon(Icons.clear, size:18), onPressed:(){ ctrl.clear(); onChanged(''); }) : null,
+          isDense: true,
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.border)),
+        ),
+      ),
+    );
+  }
+
+  List<Product> _filteredProducts(List<Product> all) {
+    final q = productQuery.trim().toLowerCase();
+    if (q.isEmpty) return all;
+    return all.where((p) => p.name.toLowerCase().contains(q) || p.category.toLowerCase().contains(q)).toList();
+  }
+
+  List<Invoice> _filteredInvoices(List<Invoice> all) {
+    final q = invoiceQuery.trim().toLowerCase();
+    if (q.isEmpty) return all;
+    return all.where((i) => i.customerName.toLowerCase().contains(q) || i.customerPhone.toLowerCase().contains(q) || i.invoiceNumber.toLowerCase().contains(q)).toList();
+  }
+
   Widget _productsList(List<Product> products){
-    if(products.isEmpty) return Center(child: Column(mainAxisAlignment:MainAxisAlignment.center, children:[Icon(Icons.inventory_2_outlined,size:64,color: Colors.grey[300]), const SizedBox(height:12), Text('لا توجد منتجات', style: GoogleFonts.cairo(color: AppColors.textSecondary))]));
+    if(products.isEmpty) return Center(child: Column(mainAxisAlignment:MainAxisAlignment.center, children:[Icon(Icons.inventory_2_outlined,size:64,color: Colors.grey[300]), const SizedBox(height:12), Text(productQuery.isEmpty ? 'لا توجد منتجات' : 'لا نتائج مطابقة للبحث', style: GoogleFonts.cairo(color: AppColors.textSecondary))]));
     return ListView.separated(
       padding: const EdgeInsets.all(16), itemCount: products.length,
       separatorBuilder: (_,__)=> const SizedBox(height:12),
@@ -81,8 +129,8 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
     );
   }
 
-  Widget _invoicesList(invoices){
-    if(invoices.isEmpty) return Center(child: Text('لا توجد فواتير', style: GoogleFonts.cairo(color: AppColors.textSecondary)));
+  Widget _invoicesList(List<Invoice> invoices){
+    if(invoices.isEmpty) return Center(child: Text(invoiceQuery.isEmpty ? 'لا توجد فواتير' : 'لا نتائج مطابقة للبحث', style: GoogleFonts.cairo(color: AppColors.textSecondary)));
     return ListView.separated(
       padding: const EdgeInsets.all(16), itemCount: invoices.length,
       separatorBuilder: (_,__)=> const SizedBox(height:12),
@@ -90,9 +138,36 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
         final inv=invoices[i];
         return GlassCard(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children:[
           Row(children:[
-            Text(inv.invoiceNumber, style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize:13)),
+            Flexible(child: Text(inv.invoiceNumber, style: GoogleFonts.cairo(fontWeight: FontWeight.w800, fontSize:13))),
+            _currencyBadge(inv.currency),
             const Spacer(),
             Text(inv.createdAt.toString().substring(0,10), style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary)),
+            PopupMenuButton(onSelected: (v) async {
+              if (v == 'edit') {
+                Navigator.push(context, MaterialPageRoute(builder:(_)=> InvoiceFormScreen(invoice: inv)));
+              }
+              if (v == 'delete') {
+                final ok = await showDialog<bool>(context:context, builder:(_)=> AlertDialog(
+                  title: Text('حذف الفاتورة؟', style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
+                  content: Text('سيتم إرجاع ${inv.quantity.toStringAsFixed(0)} للمخزون وحذف دين الزبون ${Money.withCurrency(inv.remainingBalance, inv.currency)} نهائياً.', style: GoogleFonts.cairo(fontSize:13)),
+                  actions:[
+                    TextButton(onPressed: ()=> Navigator.pop(context,false), child: Text('إلغاء', style: GoogleFonts.cairo())),
+                    ElevatedButton(onPressed: ()=> Navigator.pop(context,true), style: ElevatedButton.styleFrom(backgroundColor: AppColors.error), child: Text('حذف', style: GoogleFonts.cairo(color: Colors.white))),
+                  ],
+                ));
+                if (ok == true) {
+                  try {
+                    await ref.read(invoiceServiceProvider).delete(inv);
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('تم حذف ${inv.invoiceNumber} وإرجاع المخزون', style: GoogleFonts.cairo()), backgroundColor: AppColors.success));
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('خطأ: $e', style: GoogleFonts.cairo()), backgroundColor: AppColors.error));
+                  }
+                }
+              }
+            }, itemBuilder: (_)=> [
+              PopupMenuItem(value:'edit', child: Text('تعديل', style: GoogleFonts.cairo())),
+              PopupMenuItem(value:'delete', child: Text('حذف', style: GoogleFonts.cairo(color: AppColors.error))),
+            ]),
           ]),
           const Divider(),
           Row(children:[
@@ -100,16 +175,26 @@ class _State extends ConsumerState<FactoryScreen> with SingleTickerProviderState
               Text(inv.customerName, style: GoogleFonts.cairo(fontWeight: FontWeight.w700)),
               Text('${inv.customerPhone} • ${inv.deliveryAddress}', style: GoogleFonts.cairo(fontSize:11,color: AppColors.textSecondary)),
               const SizedBox(height:4),
-              Text('${inv.productName} x${inv.quantity} @ ${Money.format(inv.unitPrice)}', style: GoogleFonts.cairo(fontSize:11)),
+              Text('${inv.productName} x${inv.quantity} @ ${Money.withCurrency(inv.unitPrice, inv.currency)}', style: GoogleFonts.cairo(fontSize:11)),
             ])),
             Column(crossAxisAlignment:CrossAxisAlignment.end, children:[
-              Text(Money.format(inv.totalPrice), style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
-              Text('دفعة: ${Money.format(inv.downPayment)}', style: GoogleFonts.cairo(fontSize:11,color: AppColors.success)),
-              Container(padding: const EdgeInsets.symmetric(horizontal:8,vertical:2), decoration: BoxDecoration(color: AppColors.errorBg, borderRadius: BorderRadius.circular(20)), child: Text('متبقي ${Money.format(inv.remainingBalance)}', style: GoogleFonts.cairo(fontSize:11,color: AppColors.error, fontWeight: FontWeight.w700))),
+              Text(Money.withCurrency(inv.totalPrice, inv.currency), style: GoogleFonts.cairo(fontWeight: FontWeight.w800)),
+              Text('دفعة: ${Money.withCurrency(inv.downPayment, inv.currency)}', style: GoogleFonts.cairo(fontSize:11,color: AppColors.success)),
+              Container(padding: const EdgeInsets.symmetric(horizontal:8,vertical:2), decoration: BoxDecoration(color: AppColors.errorBg, borderRadius: BorderRadius.circular(20)), child: Text('متبقي ${Money.withCurrency(inv.remainingBalance, inv.currency)}', style: GoogleFonts.cairo(fontSize:11,color: AppColors.error, fontWeight: FontWeight.w700))),
             ])
           ])
         ]));
       },
+    );
+  }
+
+  Widget _currencyBadge(AppCurrency c) {
+    final isUsd = c == AppCurrency.usd;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal:6),
+      padding: const EdgeInsets.symmetric(horizontal:8, vertical:2),
+      decoration: BoxDecoration(color: isUsd ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(20)),
+      child: Text(isUsd ? '\$' : 'ل.س', style: GoogleFonts.cairo(fontSize:11, fontWeight: FontWeight.w800, color: isUsd ? AppColors.success : AppColors.goldDark)),
     );
   }
 }
