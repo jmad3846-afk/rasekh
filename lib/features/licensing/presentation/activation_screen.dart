@@ -38,11 +38,7 @@ class _S extends ConsumerState<ActivationScreen> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white.withOpacity(0.12))),
                   child: Column(children: [
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(color: AppColors.gold, borderRadius: BorderRadius.circular(14)),
-                      child: const Icon(Icons.verified_user_rounded, size: 36, color: Colors.white),
-                    ),
+                    Image.asset('assets/images/logo.png', width: 88, height: 88),
                     const SizedBox(height: 12),
                     Text('تفعيل التطبيق', style: GoogleFonts.cairo(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white)),
                     const SizedBox(height: 4),
@@ -211,7 +207,7 @@ class _S extends ConsumerState<ActivationScreen> {
                 ),
                 const SizedBox(height: 14),
                 // Footer
-                Text('Factory Management • Offline Licensing v1.0', style: GoogleFonts.cairo(fontSize:11, color: Colors.white54)),
+                Text('راسخ • Offline Licensing v1.0', style: GoogleFonts.cairo(fontSize:11, color: Colors.white54)),
               ]),
             ),
           ),
